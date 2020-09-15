@@ -5,21 +5,17 @@ use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
-    core::{BlockView, Capacity, DepType, ScriptHashType, TransactionView},
+    core::{BlockView, Capacity, DepType, TransactionView},
     h256,
     packed::{self, Byte32, CellDep, CellOutput, OutPoint, Script},
     prelude::*,
     H160, H256,
 };
-use clap::{App, AppSettings, Arg, ArgMatches};
+use clap::{App, Arg, ArgMatches};
 use int_enum::IntEnum;
 use molecule::prelude::Byte;
 use serde::{Deserialize, Serialize};
-use tockb_types::{
-    config,
-    generated::{basic, tockb_cell_data::ToCKBCellData},
-    tockb_cell,
-};
+use tockb_types::{generated::tockb_cell_data::ToCKBCellData, tockb_cell};
 
 use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
 use crate::plugin::{KeyStoreHandler, PluginManager, SignTarget};
@@ -33,19 +29,16 @@ use crate::utils::{
     },
     index::IndexController,
     other::{
-        check_capacity, get_address, get_arg_value, get_live_cell_with_cache,
-        get_max_mature_number, get_network_type, get_privkey_signer, get_to_data, is_mature,
-        read_password, sync_to_tip,
+        check_capacity, get_arg_value, get_live_cell_with_cache, get_max_mature_number,
+        get_network_type, get_privkey_signer, is_mature, read_password, sync_to_tip,
     },
 };
 use ckb_index::{with_index_db, IndexDatabase, LiveCellInfo};
 use ckb_sdk::{
-    constants::{
-        DAO_TYPE_HASH, MIN_SECP_CELL_CAPACITY, MULTISIG_TYPE_HASH, ONE_CKB, SIGHASH_TYPE_HASH,
-    },
+    constants::{MIN_SECP_CELL_CAPACITY, MULTISIG_TYPE_HASH, ONE_CKB},
     wallet::DerivationPath,
-    Address, AddressPayload, GenesisInfo, HttpRpcClient, HumanCapacity, MultisigConfig, SignerFn,
-    Since, SinceType, TxHelper, SECP256K1,
+    Address, AddressPayload, GenesisInfo, HttpRpcClient, MultisigConfig, SignerFn, Since,
+    SinceType, TxHelper, SECP256K1,
 };
 
 // Max derived change address to search
@@ -493,14 +486,16 @@ impl<'a> ToCkbSubCommand<'a> {
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();
-        let toCKB_data = ToCKBCellData::new_builder()
+        let tockb_data = ToCKBCellData::new_builder()
             .status(Byte::new(tockb_cell::ToCKBStatus::Initial.int_value()))
             .lot_size(Byte::new(lot_size))
             .build()
             .as_bytes();
-        check_capacity(to_capacity, toCKB_data.len())?;
-        let lockscript_hash = hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_hash = hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
+        check_capacity(to_capacity, tockb_data.len())?;
+        let lockscript_hash =
+            hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
+        let typescript_hash =
+            hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
         let typescript = Script::new_builder()
             .code_hash(Byte32::from_slice(&typescript_hash).unwrap())
             .hash_type(DepType::Code.into())
@@ -516,7 +511,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .type_(Some(typescript).pack())
             .lock(lockscript)
             .build();
-        helper.add_output(to_output, toCKB_data);
+        helper.add_output(to_output, tockb_data);
         if rest_capacity >= MIN_SECP_CELL_CAPACITY {
             let change_output = CellOutput::new_builder()
                 .capacity(Capacity::shannons(rest_capacity).pack())
@@ -550,97 +545,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         Ok(tx)
-    }
-
-    pub fn get_capacity(&mut self, lock_hashes: Vec<Byte32>) -> Result<(u64, u64, u64), String> {
-        let max_mature_number = get_max_mature_number(self.rpc_client)?;
-        self.with_db(|db| {
-            let mut total_capacity = 0;
-            let mut dao_capacity = 0;
-            let mut immature_capacity = 0;
-            let mut terminator = |_idx: usize, info: &LiveCellInfo| {
-                if !is_mature(info, max_mature_number) {
-                    immature_capacity += info.capacity;
-                }
-                if info
-                    .type_hashes
-                    .as_ref()
-                    .filter(|(code_hash, _)| code_hash == &DAO_TYPE_HASH)
-                    .is_some()
-                {
-                    dao_capacity += info.capacity;
-                }
-                total_capacity += info.capacity;
-                (false, false)
-            };
-            for lock_hash in lock_hashes {
-                let _ = db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
-            }
-            (total_capacity, immature_capacity, dao_capacity)
-        })
-    }
-
-    pub fn get_live_cells<F>(
-        &mut self,
-        to_number: u64,
-        limit: usize,
-        mut func: F,
-        fast_mode: bool,
-    ) -> Result<(LiveCells, Option<(u32, u64)>), String>
-    where
-        F: FnMut(
-            &IndexDatabase,
-            &mut dyn FnMut(usize, &LiveCellInfo) -> (bool, bool),
-        ) -> Vec<LiveCellInfo>,
-    {
-        let (infos, total_count, total_capacity, current_count, current_capacity) =
-            self.with_db(|db| {
-                let mut total_count: u32 = 0;
-                let mut total_capacity: u64 = 0;
-                let mut current_count: u32 = 0;
-                let mut current_capacity: u64 = 0;
-                let mut terminator = |idx, info: &LiveCellInfo| {
-                    let stop = idx >= limit || info.number > to_number;
-                    let push_info = !stop;
-                    total_count += 1;
-                    total_capacity += info.capacity;
-                    if push_info {
-                        current_count += 1;
-                        current_capacity += info.capacity;
-                    }
-                    (fast_mode && stop, push_info)
-                };
-                let infos = func(&db, &mut terminator);
-                (
-                    infos,
-                    total_count,
-                    total_capacity,
-                    current_count,
-                    current_capacity,
-                )
-            })?;
-
-        let max_mature_number = get_max_mature_number(self.rpc_client)?;
-        let live_cells = infos
-            .into_iter()
-            .map(|info| {
-                let mature = is_mature(&info, max_mature_number);
-                LiveCell { info, mature }
-            })
-            .collect::<Vec<_>>();
-        let total = if fast_mode {
-            None
-        } else {
-            Some((total_count, total_capacity))
-        };
-        Ok((
-            LiveCells {
-                live_cells,
-                current_count,
-                current_capacity,
-            },
-            total,
-        ))
     }
 
     fn supply_capacity(
@@ -783,7 +687,6 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                 };
                 self.deploy(args, false).map_err(|e| format!("{:?}", e))
             }
-            ("bonding", Some(m)) => todo!(),
             ("deposit_request", Some(m)) => {
                 let args = DepositRequestArgs {
                     pledge: get_arg_value(m, "pledge")?

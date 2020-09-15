@@ -1,7 +1,6 @@
 use super::consts::SCRIPT_CONFIG_FILE;
 use config::{Config, ConfigError, Environment, File};
 use serde_derive::{Deserialize, Serialize};
-use std::env;
 
 #[derive(Deserialize, Serialize, Default, Debug)]
 pub struct OutpointConf {

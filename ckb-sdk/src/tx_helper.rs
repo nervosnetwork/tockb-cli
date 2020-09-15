@@ -4,9 +4,7 @@ use ckb_types::{
     bytes::{Bytes, BytesMut},
     core::{ScriptHashType, TransactionBuilder, TransactionView},
     h256,
-    packed::{
-        self, Byte32, CellDep, CellInput, CellOutput, OutPoint, Script, Transaction, WitnessArgs,
-    },
+    packed::{self, Byte32, CellInput, CellOutput, OutPoint, Script, Transaction, WitnessArgs},
     prelude::*,
     H160, H256,
 };

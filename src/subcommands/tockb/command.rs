@@ -21,8 +21,7 @@ use tockb_types::{
     tockb_cell,
 };
 
-use super::config::{OutpointConf, ScriptConf, ScriptsConf};
-use super::consts::{TOCKB_LOCKSCRIPT_HASH, TOCKB_TYPESCRIPT_HASH};
+use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
 use crate::plugin::{KeyStoreHandler, PluginManager, SignTarget};
 pub use crate::subcommands::wallet::start_index_thread;
 use crate::subcommands::{CliSubCommand, Output};
@@ -166,11 +165,7 @@ impl<'a> ToCkbSubCommand<'a> {
             ])
     }
 
-    pub fn deploy(
-        &mut self,
-        args: DeployRequestArgs,
-        skip_check: bool,
-    ) -> Result<Output, String> {
+    pub fn deploy(&mut self, args: DeployRequestArgs, skip_check: bool) -> Result<Output, String> {
         // dbg!(&args);
         let DeployRequestArgs {
             lockscript_path,
@@ -241,6 +236,7 @@ impl<'a> ToCkbSubCommand<'a> {
         &mut self,
         args: DepositRequestArgs,
         skip_check: bool,
+        settings: Settings,
     ) -> Result<TransactionView, String> {
         let DepositRequestArgs {
             privkey_path,
@@ -471,27 +467,17 @@ impl<'a> ToCkbSubCommand<'a> {
         }
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
-                Byte32::from_slice(
-                    &hex::decode(
-                        "24530a24a5711c2e017631b3afc4adf25e55d9af31b22eff7e455f65642a4c09",
-                    )
+                Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
                     .unwrap(),
-                )
-                .unwrap(),
             )
-            .index(0u32.pack())
+            .index(settings.lockscript.outpoint.index.pack())
             .build();
         let typescript_out_point = OutPoint::new_builder()
             .tx_hash(
-                Byte32::from_slice(
-                    &hex::decode(
-                        "786e51c239122e96b1e44496f8c30012d0f7099917e69dd938523b125a46e354",
-                    )
+                Byte32::from_slice(&hex::decode(settings.typescript.outpoint.tx_hash).unwrap())
                     .unwrap(),
-                )
-                .unwrap(),
             )
-            .index(0u32.pack())
+            .index(settings.typescript.outpoint.index.pack())
             .build();
         let typescript_cell_dep = CellDep::new_builder()
             .out_point(typescript_out_point)
@@ -513,15 +499,17 @@ impl<'a> ToCkbSubCommand<'a> {
             .build()
             .as_bytes();
         check_capacity(to_capacity, toCKB_data.len())?;
+        let lockscript_hash = hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
+        let typescript_hash = hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
         let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(TOCKB_TYPESCRIPT_HASH.as_ref()).unwrap())
+            .code_hash(Byte32::from_slice(&typescript_hash).unwrap())
             .hash_type(DepType::Code.into())
             .args(vec![kind].pack())
             .build();
         let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(TOCKB_LOCKSCRIPT_HASH.as_ref()).unwrap())
+            .code_hash(Byte32::from_slice(&lockscript_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(TOCKB_TYPESCRIPT_HASH.as_ref().pack())
+            .args(typescript_hash.pack())
             .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
@@ -782,6 +770,8 @@ impl<'a> ToCkbSubCommand<'a> {
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
     fn process(&mut self, matches: &ArgMatches, debug: bool) -> Result<Output, String> {
         let config_path = matches.value_of("config-path").unwrap().to_string();
+        let settings = Settings::new(&config_path)
+            .map_err(|_| format!("failed to load config from {}", &config_path))?;
         match matches.subcommand() {
             ("deploy", Some(m)) => {
                 let args = DeployRequestArgs {
@@ -818,7 +808,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                         .value_of("derive-change-address")
                         .map(|s| s.to_string()),
                 };
-                let tx = self.deposit_request(args, false)?;
+                let tx = self.deposit_request(args, false, settings)?;
                 if debug {
                     let rpc_tx_view = json_types::TransactionView::from(tx);
                     Ok(Output::new_output(rpc_tx_view))

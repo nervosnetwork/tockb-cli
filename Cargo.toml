@@ -1,11 +1,19 @@
 [package]
-name = "ckb-cli"
+name = "tockb-cli"
 version = "0.35.0"
 license = "MIT"
 authors = ["Linfeng Qian <thewawar@gmail.com>", "Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 
 [dependencies]
+tockb-types = { path = "../types" }
+thiserror = "1"
+molecule = "=0.6.0"
+int-enum = "0.4"
+anyhow = "1"
+lazy_static = "1"
+hex = "0.4"
+
 ckb-jsonrpc-types = { git = "https://github.com/nervosnetwork/ckb", tag = "v0.35.0-rc1" }
 ckb-hash = { git = "https://github.com/nervosnetwork/ckb", tag = "v0.35.0-rc1" }
 ckb-crypto = { git = "https://github.com/nervosnetwork/ckb", tag = "v0.35.0-rc1", features = ["secp"] }

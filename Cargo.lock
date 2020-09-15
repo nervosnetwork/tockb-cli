@@ -59,6 +59,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b602bfe940d21c130f3895acd65221e8a61270debe89d628b9cb4e3ccb8569b"
+
+[[package]]
 name = "arrayref"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -340,58 +346,6 @@ dependencies = [
  "failure",
  "serde",
  "toml",
-]
-
-[[package]]
-name = "ckb-cli"
-version = "0.35.0"
-dependencies = [
- "ansi_term",
- "atty",
- "byteorder",
- "chrono",
- "ckb-build-info",
- "ckb-cli-plugin-protocol",
- "ckb-crypto",
- "ckb-dao-utils",
- "ckb-hash",
- "ckb-index",
- "ckb-jsonrpc-types",
- "ckb-resource",
- "ckb-sdk",
- "ckb-types",
- "ckb-util",
- "clap",
- "clap_generate",
- "colored",
- "crossbeam-channel",
- "dirs",
- "dtoa",
- "eaglesong",
- "env_logger",
- "faster-hex 0.4.1",
- "ipnetwork",
- "itertools",
- "jsonrpc-client-core",
- "jsonrpc-core 10.1.0",
- "jsonrpc-derive",
- "jsonrpc-http-server",
- "jsonrpc-server-utils",
- "log 0.4.11",
- "parity-multiaddr",
- "regex",
- "rpassword",
- "rustyline",
- "secp256k1",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_yaml",
- "shell-words",
- "termion",
- "tui",
- "url 1.7.2",
- "yaml-rust",
 ]
 
 [[package]]
@@ -1257,6 +1211,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
+
+[[package]]
 name = "hmac"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1397,6 +1357,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "076f042c5b7b98f31d205f1249267e12a6518c1481e9dae9764af19b707d2292"
 dependencies = [
  "autocfg 1.0.0",
+]
+
+[[package]]
+name = "int-enum"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b1428b2b1abe959e6eedb0a17d0ab12f6ba20e1106cc29fc4874e3ba393c177"
+dependencies = [
+ "cfg-if",
+ "int-enum-impl",
+]
+
+[[package]]
+name = "int-enum-impl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2c3cecaad8ca1a5020843500c696de2b9a07b63b624ddeef91f85f9bafb3671"
+dependencies = [
+ "cfg-if",
+ "proc-macro-crate",
+ "proc-macro2 1.0.10",
+ "quote 1.0.3",
+ "syn 1.0.17",
 ]
 
 [[package]]
@@ -2062,6 +2045,15 @@ name = "ppv-lite86"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74490b50b9fbe561ac330df47c08f3f33073d2d00c150f719147d7c54522fa1b"
+
+[[package]]
+name = "proc-macro-crate"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d6ea3c4595b96363c13943497db34af4460fb474a95c43f4446ad341b8c9785"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "proc-macro-error"
@@ -2897,6 +2889,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dfdd070ccd8ccb78f4ad66bf1982dc37f620ef696c6b5028fe2ed83dd3d0d08"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd80fc12f73063ac132ac92aceea36734f04a1d93c1240c6944e23a3b8841793"
+dependencies = [
+ "proc-macro2 1.0.10",
+ "quote 1.0.3",
+ "syn 1.0.17",
+]
+
+[[package]]
 name = "thread_local"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2923,6 +2935,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8a021c69bb74a44ccedb824a046447e2c84a01df9e5c20779750acb38e11b2"
 dependencies = [
  "crunchy",
+]
+
+[[package]]
+name = "tockb-cli"
+version = "0.35.0"
+dependencies = [
+ "ansi_term",
+ "anyhow",
+ "atty",
+ "byteorder",
+ "chrono",
+ "ckb-build-info",
+ "ckb-cli-plugin-protocol",
+ "ckb-crypto",
+ "ckb-dao-utils",
+ "ckb-hash",
+ "ckb-index",
+ "ckb-jsonrpc-types",
+ "ckb-resource",
+ "ckb-sdk",
+ "ckb-types",
+ "ckb-util",
+ "clap",
+ "clap_generate",
+ "colored",
+ "crossbeam-channel",
+ "dirs",
+ "dtoa",
+ "eaglesong",
+ "env_logger",
+ "faster-hex 0.4.1",
+ "hex",
+ "int-enum",
+ "ipnetwork",
+ "itertools",
+ "jsonrpc-client-core",
+ "jsonrpc-core 10.1.0",
+ "jsonrpc-derive",
+ "jsonrpc-http-server",
+ "jsonrpc-server-utils",
+ "lazy_static",
+ "log 0.4.11",
+ "molecule",
+ "parity-multiaddr",
+ "regex",
+ "rpassword",
+ "rustyline",
+ "secp256k1",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_yaml",
+ "shell-words",
+ "termion",
+ "thiserror",
+ "tockb-types",
+ "tui",
+ "url 1.7.2",
+ "yaml-rust",
+]
+
+[[package]]
+name = "tockb-types"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "int-enum",
+ "molecule",
 ]
 
 [[package]]

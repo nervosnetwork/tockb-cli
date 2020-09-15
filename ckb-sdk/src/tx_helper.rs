@@ -23,7 +23,7 @@ use crate::{AddressPayload, AddressType, CodeHashIndex, GenesisInfo, Since};
 ///  2. Inspect transaction information
 #[derive(Clone)]
 pub struct TxHelper {
-    transaction: TransactionView,
+    pub transaction: TransactionView,
     multisig_configs: HashMap<H160, MultisigConfig>,
     // Only support sighash/multisig signatures
     signatures: HashMap<Bytes, HashSet<Bytes>>,
@@ -105,27 +105,28 @@ impl TxHelper {
         };
 
         let input = CellInput::new_builder()
-            .previous_output(out_point)
+            .previous_output(out_point.clone())
             .since(since.pack())
             .build();
 
-        self.transaction = self.transaction.as_advanced_builder().input(input).build();
-        let mut cell_deps: HashSet<CellDep> = HashSet::default();
-        for ((code_hash, _), _) in self.input_group(get_live_cell, skip_check)?.into_iter() {
-            let code_hash: H256 = code_hash.unpack();
-            if code_hash == SIGHASH_TYPE_HASH {
-                cell_deps.insert(genesis_info.sighash_dep());
-            } else if code_hash == MULTISIG_TYPE_HASH {
-                cell_deps.insert(genesis_info.multisig_dep());
-            } else {
-                panic!("Unexpected input code_hash: {:#x}", code_hash);
+        let outpoint_cell: CellOutput = get_live_cell(out_point.clone(), skip_check)?;
+        let code_hash: H256 = outpoint_cell.lock().code_hash().unpack();
+        let cell_dep = if code_hash == SIGHASH_TYPE_HASH {
+            Some(genesis_info.sighash_dep())
+        } else if code_hash == MULTISIG_TYPE_HASH {
+            Some(genesis_info.multisig_dep())
+        } else {
+           None
+        };
+
+        let mut tx_builder = self.transaction.as_advanced_builder().input(input);
+        if cell_dep.is_some() {
+            let cell_dep = cell_dep.unwrap();
+            if self.transaction.cell_deps().into_iter().all(|d| &d != &cell_dep) {
+                tx_builder = tx_builder.cell_dep(cell_dep);
             }
         }
-        self.transaction = self
-            .transaction
-            .as_advanced_builder()
-            .set_cell_deps(cell_deps.into_iter().collect())
-            .build();
+        self.transaction = tx_builder.build();
         Ok(())
     }
 

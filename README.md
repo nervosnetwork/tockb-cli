@@ -1,92 +1,125 @@
-# ckb-cli
-CKB command line tool
+# tockb-cli
+toCKB command line tool, forked from [ckb-cli](https://github.com/nervosnetwork/ckb-cli),
+extended with subcommands to interact with [toCKB](https://github.com/nervosnetwork/toCKB). 
 
-## Features
-```
-    rpc         Invoke RPC call to node
-    account     Manage accounts
-    mock-tx     Handle mock transactions (verify/send)
-    tx          Handle common sighash/multisig transaction
-    util        Utilities
-    molecule    Molecule encode/decode utilities
-    wallet      Transfer / query balance (with local index) / key utils
-    dao         Deposit / prepare / withdraw / query NervosDAO balance (with local index) / key utils
+## Quick Start
+
+```bash
+# install
+$ git clone https://github.com/nervosnetwork/tockb-cli.git
+$ cd tockb-cli
+$ git checkout develop
+$ cargo build
+
+$ ./target/debug/tockb-cli tockb -h
+tockb-cli-tockb
+tockb cli tools
+
+USAGE:
+    tockb-cli tockb [FLAGS] [OPTIONS] [SUBCOMMAND]
+
+FLAGS:
+        --no-color         Do not highlight(color) output json
+        --debug            Display request parameters
+        --wait-for-sync    Ensure the index-store synchronizes completely before command being executed
+        --no-sync          Don't wait index database sync to tip
+    -h, --help             Prints help information
+    -V, --version          Prints version information
+
+OPTIONS:
+    -c, --config-path <config-path>        tockb config path [default: .tockb-cli]
+        --output-format <output-format>    Select output format [default: yaml]  [possible values: yaml, json]
+
+SUBCOMMANDS:
+    deploy             deploy toCKB scripts
+    deposit_request    create a cell to request deposit
+    help               Prints this message or the help of the given subcommand(s)
+
+$ ./target/debug/tockb-cli tockb deploy -h
+tockb-cli-tockb-deploy
+deploy toCKB scripts
+
+USAGE:
+    tockb-cli tockb deploy [FLAGS] [OPTIONS] --privkey-path <privkey-path> --tx-fee <tx-fee>
+
+FLAGS:
+        --no-color         Do not highlight(color) output json
+        --debug            Display request parameters
+        --wait-for-sync    Ensure the index-store synchronizes completely before command being executed
+        --no-sync          Don't wait index database sync to tip
+    -h, --help             Prints help information
+    -V, --version          Prints version information
+
+OPTIONS:
+        --privkey-path <privkey-path>          Private key file path (only read first line)
+        --output-format <output-format>        Select output format [default: yaml]  [possible values: yaml, json]
+        --tx-fee <tx-fee>                      The transaction fee capacity (unit: CKB, format: 0.0001)
+    -t, --typescript-path <typescript-path>    typescript path [default: ../build/release/toCKB-typescript]
+    -l, --lockscript-path <lockscript-path>    lockscript path [default: ../build/release/toCKB-lockscript]
+
+$ ./target/debug/tockb-cli tockb deploy --tx-fee 0.1 --privkey-path privkeys/0
+scripts config:
+
+[lockscript]
+code_hash = "0d665001e9c412712ceb28ea809639400af13fa53df65e36cb46a9cf3c4d4023"
+
+[lockscript.outpoint]
+tx_hash = "673950ab271b85eb586389a38c33c21e5cefd84470ad2b4ef8c9f906ffbfaf2f"
+index = 1
+
+[typescript]
+code_hash = "6b643871862b98c6836e3c4f41d5b42c98bd3dc6da17c0947d655ccf66b20e9c"
+
+[typescript.outpoint]
+tx_hash = "673950ab271b85eb586389a38c33c21e5cefd84470ad2b4ef8c9f906ffbfaf2f"
+index = 0
+
+scripts config written to ".tockb-cli/scripts.toml"
+deploy finished!
+
+$ ./target/debug/tockb-cli tockb deposit_request -h
+tockb-cli-tockb-deposit_request
+create a cell to request deposit
+
+USAGE:
+    tockb-cli tockb deposit_request [FLAGS] [OPTIONS] --tx-fee <tx-fee>
+
+FLAGS:
+        --no-color         Do not highlight(color) output json
+        --debug            Display request parameters
+        --wait-for-sync    Ensure the index-store synchronizes completely before command being executed
+        --no-sync          Don't wait index database sync to tip
+    -h, --help             Prints help information
+    -V, --version          Prints version information
+
+OPTIONS:
+        --privkey-path <privkey-path>
+            Private key file path (only read first line)
+
+        --from-account <from-account>
+            The account's lock-arg or sighash address (transfer from this account)
+
+        --output-format <output-format>
+            Select output format [default: yaml]  [possible values: yaml, json]
+
+        --from-locked-address <from-locked-address>
+            The time locked multisig address to search live cells (which S=0,R=0,M=1,N=1 and have since value)
+
+        --tx-fee <tx-fee>
+            The transaction fee capacity (unit: CKB, format: 0.0001)
+
+        --derive-receiving-address-length <derive-receiving-address-length>
+            Search derived receiving address length [default: 1000]
+
+        --derive-change-address <derive-change-address>
+            Manually specify the last change address (search 10000 addresses max, required keystore password, see: BIP-
+            44)
+    -p, --pledge <pledge>                                                      pledge
+    -l, --lot_size <lot_size>                                                  lot_size
+    -k, --kind <kind>                                                          kind
+
+$ ./target/debug/tockb-cli tockb deposit_request -l 1 -k 1 -p 10000 --tx-fee 0.1 --privkey-path privkeys/0
+0xe0e69db2a07a91a6bb1ab057f4ab0fca58cf1313a0d31cd5b83892d48b50a9f1
 ```
 
-All second level sub-commands are listed in [wiki page](https://github.com/nervosnetwork/ckb-cli/wiki/Sub-Commands).
-
-## Build this project
-```
-git clone https://github.com/nervosnetwork/ckb-cli.git
-cd ckb-cli
-cargo install --path . -f
-```
-
-## Usage
-
-Better export an env first (or give in argument)
-
-```
-export API_URL=http://127.0.0.1:8114
-```
-
-Directly go to **gorgeous** interactive mode:
-
-```
-ckb-cli
-```
-
-Show available commands
-``` shell
-# Top level help doc
-ckb-cli --help
-# RPC help doc
-ckb-cli rpc --help
-```
-
-### Example: Get tip header (yaml output format)
-
-```
-ckb-cli rpc get_tip_header
-```
-
-**Response:**
-``` yaml
-version: "0"
-parent_hash: 0xb379bf3d369fccadfa69fa2273a8f596489b69dab996ca02a3eb1ae4cf765ca3
-timestamp: "1567775474688"
-number: "102"
-epoch: "0"
-transactions_root: 0xc4991d3e261c27a0ce7ea9801de5f0a5f56ffb82a29d7a6e8e7cf44dbb2db114
-witnesses_root: 0x39116bc1a56f5ca82cf5226f172f97ff8a8d9626ca7e41d8cd92e76666e069f8
-proposals_hash: 0x0000000000000000000000000000000000000000000000000000000000000000
-difficulty: 0x4000000
-uncles_hash: 0x0000000000000000000000000000000000000000000000000000000000000000
-uncles_count: "0"
-dao: 0x0100000000000000af9a31ce318a230000cc083d71c4350000d774f0356a0000
-nonce: "1876243812404095811"
-hash: 0x0384ebc55b7cb56e51044743e05fb83a4edb7173524339c35df4c71fcdb0854d
-```
-
-### Example: Get live cell (json output format)
-```
-ckb-cli rpc get_live_cell --tx-hash 0x4ec75b5a8de8d180853d5046760a99285c73283a5dc528f81d6ee056f5335172 --index 0 --output-format json
-```
-
-**Response:**
-``` json
-{
-  "cell": {
-    "capacity": "125000000000",
-    "lock": {
-      "args": [
-        "0x64257f00b6b63e987609fa9be2d0c86d351020fb"
-      ],
-      "code_hash": "0x1892ea40d82b53c678ff88312450bbb17e164d7a3e0a90941aa58839f56f8df2",
-      "hash_type": "type"
-    },
-    "type": null
-  },
-  "status": "live"
-}
-```
+To know more details about ckb-cli commands, please refer the [original document](https://github.com/nervosnetwork/ckb-cli).

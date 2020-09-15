@@ -159,7 +159,6 @@ impl<'a> ToCkbSubCommand<'a> {
     }
 
     pub fn deploy(&mut self, args: DeployRequestArgs, skip_check: bool) -> Result<Output, String> {
-        // dbg!(&args);
         let DeployRequestArgs {
             lockscript_path,
             typescript_path,
@@ -219,6 +218,7 @@ impl<'a> ToCkbSubCommand<'a> {
         };
         let s = toml::to_string(&resp).expect("toml serde error");
         println!("scripts config: \n\n{}", &s);
+        std::fs::create_dir_all(&config_path).expect("failed to create dir");
         let path = std::path::Path::new(&config_path).join("scripts.toml");
         std::fs::write(&path, &s).expect("fail to write scripts config");
         println!("scripts config written to {:?}", &path);
@@ -674,8 +674,6 @@ impl<'a> ToCkbSubCommand<'a> {
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
     fn process(&mut self, matches: &ArgMatches, debug: bool) -> Result<Output, String> {
         let config_path = matches.value_of("config-path").unwrap().to_string();
-        let settings = Settings::new(&config_path)
-            .map_err(|_| format!("failed to load config from {}", &config_path))?;
         match matches.subcommand() {
             ("deploy", Some(m)) => {
                 let args = DeployRequestArgs {
@@ -688,6 +686,9 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                 self.deploy(args, false).map_err(|e| format!("{:?}", e))
             }
             ("deposit_request", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
                 let args = DepositRequestArgs {
                     pledge: get_arg_value(m, "pledge")?
                         .parse()

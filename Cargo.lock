@@ -2991,6 +2991,7 @@ dependencies = [
  "termion",
  "thiserror",
  "tockb-types",
+ "toml",
  "tui",
  "url 1.7.2",
  "yaml-rust",

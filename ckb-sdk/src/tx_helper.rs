@@ -116,13 +116,18 @@ impl TxHelper {
         } else if code_hash == MULTISIG_TYPE_HASH {
             Some(genesis_info.multisig_dep())
         } else {
-           None
+            None
         };
 
         let mut tx_builder = self.transaction.as_advanced_builder().input(input);
         if cell_dep.is_some() {
             let cell_dep = cell_dep.unwrap();
-            if self.transaction.cell_deps().into_iter().all(|d| &d != &cell_dep) {
+            if self
+                .transaction
+                .cell_deps()
+                .into_iter()
+                .all(|d| &d != &cell_dep)
+            {
                 tx_builder = tx_builder.cell_dep(cell_dep);
             }
         }

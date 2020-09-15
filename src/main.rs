@@ -19,8 +19,8 @@ use interactive::InteractiveEnv;
 use plugin::PluginManager;
 use subcommands::{
     start_index_thread, AccountSubCommand, ApiServerSubCommand, CliSubCommand, DAOSubCommand,
-    MockTxSubCommand, MoleculeSubCommand, PluginSubCommand, RpcSubCommand, TxSubCommand,
-    UtilSubCommand, WalletSubCommand, ToCkbSubCommand,
+    MockTxSubCommand, MoleculeSubCommand, PluginSubCommand, RpcSubCommand, ToCkbSubCommand,
+    TxSubCommand, UtilSubCommand, WalletSubCommand,
 };
 use utils::other::get_genesis_info;
 use utils::{
@@ -174,7 +174,7 @@ fn main() -> Result<(), io::Error> {
             index_controller.clone(),
             wait_for_sync,
         )
-            .process(&sub_matches, debug),
+        .process(&sub_matches, debug),
         ("dao", Some(sub_matches)) => {
             get_genesis_info(&None, &mut rpc_client).and_then(|genesis_info| {
                 DAOSubCommand::new(

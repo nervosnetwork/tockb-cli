@@ -22,9 +22,9 @@ pub use dao::DAOSubCommand;
 pub use mock_tx::MockTxSubCommand;
 pub use plugin::PluginSubCommand;
 pub use rpc::RpcSubCommand;
+pub use tockb::command::ToCkbSubCommand;
 pub use tx::TxSubCommand;
 pub use util::UtilSubCommand;
-pub use tockb::command::ToCkbSubCommand;
 pub use wallet::{start_index_thread, LiveCells, TransferArgs, WalletSubCommand};
 
 use clap::ArgMatches;

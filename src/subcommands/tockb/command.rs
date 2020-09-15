@@ -1,24 +1,31 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
-    core::{BlockView, DepType, Capacity, ScriptHashType, TransactionView},
+    core::{BlockView, Capacity, DepType, ScriptHashType, TransactionView},
     h256,
-    packed::{self, CellDep, Byte32, CellOutput, OutPoint, Script},
+    packed::{self, Byte32, CellDep, CellOutput, OutPoint, Script},
     prelude::*,
     H160, H256,
 };
-use int_enum::IntEnum;
 use clap::{App, AppSettings, Arg, ArgMatches};
-use serde::{Deserialize, Serialize};
-use tockb_types::{tockb_cell, config, generated::{basic, tockb_cell_data::ToCKBCellData}};
+use int_enum::IntEnum;
 use molecule::prelude::Byte;
+use serde::{Deserialize, Serialize};
+use tockb_types::{
+    config,
+    generated::{basic, tockb_cell_data::ToCKBCellData},
+    tockb_cell,
+};
 
-use super::consts::{TOCKB_TYPESCRIPT_HASH, TOCKB_LOCKSCRIPT_HASH};
-use crate::subcommands::{CliSubCommand, Output};
+use super::config::{OutpointConf, ScriptConf, ScriptsConf};
+use super::consts::{TOCKB_LOCKSCRIPT_HASH, TOCKB_TYPESCRIPT_HASH};
 use crate::plugin::{KeyStoreHandler, PluginManager, SignTarget};
+pub use crate::subcommands::wallet::start_index_thread;
+use crate::subcommands::{CliSubCommand, Output};
 use crate::utils::{
     arg,
     arg_parser::{
@@ -41,7 +48,6 @@ use ckb_sdk::{
     Address, AddressPayload, GenesisInfo, HttpRpcClient, HumanCapacity, MultisigConfig, SignerFn,
     Since, SinceType, TxHelper, SECP256K1,
 };
-pub use crate::subcommands::wallet::start_index_thread;
 
 // Max derived change address to search
 const DERIVE_CHANGE_ADDRESS_MAX_LEN: u32 = 10000;
@@ -87,8 +93,8 @@ impl<'a> ToCkbSubCommand<'a> {
     }
 
     fn with_db<F, T>(&mut self, func: F) -> Result<T, String>
-        where
-            F: FnOnce(IndexDatabase) -> T,
+    where
+        F: FnOnce(IndexDatabase) -> T,
     {
         if self.wait_for_sync {
             sync_to_tip(&self.index_controller)?;
@@ -100,18 +106,46 @@ impl<'a> ToCkbSubCommand<'a> {
             let db = IndexDatabase::from_db(backend, cf, network_type, genesis_info, false)?;
             Ok(func(db))
         })
-            .map_err(|_err| {
-                format!(
-                    "Index database may not ready, sync process: {}",
-                    self.index_controller.state().read().to_string()
-                )
-            })
+        .map_err(|_err| {
+            format!(
+                "Index database may not ready, sync process: {}",
+                self.index_controller.state().read().to_string()
+            )
+        })
     }
 
     pub fn subcommand() -> App<'static> {
         App::new("tockb")
             .about("tockb cli tools")
+            .arg(
+                Arg::with_name("config-path")
+                    .long("config-path")
+                    .short('c')
+                    .takes_value(true)
+                    .default_value(".tockb-cli")
+                    .about("tockb config path"),
+            )
             .subcommands(vec![
+                App::new("deploy")
+                    .about("deploy toCKB scripts")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(
+                        Arg::with_name("typescript-path")
+                            .long("typescript-path")
+                            .short('t')
+                            .takes_value(true)
+                            .default_value("../build/release/toCKB-typescript")
+                            .about("typescript path"),
+                    )
+                    .arg(
+                        Arg::with_name("lockscript-path")
+                            .long("lockscript-path")
+                            .short('l')
+                            .takes_value(true)
+                            .default_value("../build/release/toCKB-lockscript")
+                            .about("lockscript path"),
+                    ),
                 App::new("deposit_request")
                     .about("create a cell to request deposit")
                     .arg(arg::privkey_path().required_unless(arg::from_account().get_name()))
@@ -130,6 +164,77 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("-l --lot_size=[lot_size] 'lot_size'"))
                     .arg(Arg::from("-k --kind=[kind] 'kind'")),
             ])
+    }
+
+    pub fn deploy(
+        &mut self,
+        args: DeployRequestArgs,
+        skip_check: bool,
+    ) -> Result<Output, String> {
+        // dbg!(&args);
+        let DeployRequestArgs {
+            lockscript_path,
+            typescript_path,
+            config_path,
+            tx_fee,
+            privkey_path,
+        } = args;
+
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+
+        let typescript_bin = std::fs::read(&typescript_path).map_err(|e| format!("{}", e))?;
+        let lockscript_bin = std::fs::read(&lockscript_path).map_err(|e| format!("{}", e))?;
+        let typescript_code_hash = blake2b_256(&typescript_bin);
+        let lockscript_code_hash = blake2b_256(&lockscript_bin);
+        let extra_capacity = 62;
+        let to_lock_capacity = Capacity::bytes(lockscript_bin.len() + extra_capacity)
+            .map_err(|e| format!("{}", e))?
+            .as_u64();
+        let to_type_capacity = Capacity::bytes(typescript_bin.len() + extra_capacity)
+            .map_err(|e| format!("{}", e))?
+            .as_u64();
+        let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
+        let lock_output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_lock_capacity).pack())
+            .lock((&from_address_payload).into())
+            .build();
+        let type_output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_type_capacity).pack())
+            .lock((&from_address_payload).into())
+            .build();
+        let mut helper = TxHelper::default();
+        helper.add_output(type_output, typescript_bin.into());
+        helper.add_output(lock_output, lockscript_bin.into());
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        let resp = ScriptsConf {
+            typescript: ScriptConf {
+                code_hash: hex::encode(&typescript_code_hash),
+                outpoint: OutpointConf {
+                    tx_hash: tx_hash.to_string(),
+                    index: 0,
+                },
+            },
+            lockscript: ScriptConf {
+                code_hash: hex::encode(&lockscript_code_hash),
+                outpoint: OutpointConf {
+                    tx_hash: tx_hash.to_string(),
+                    index: 1,
+                },
+            },
+        };
+        let s = toml::to_string(&resp).expect("toml serde error");
+        println!("scripts config: \n\n{}", &s);
+        let path = std::path::Path::new(&config_path).join("scripts.toml");
+        std::fs::write(&path, &s).expect("fail to write scripts config");
+        println!("scripts config written to {:?}", &path);
+        Ok(Output::new_output("deploy finished!"))
     }
 
     pub fn deposit_request(
@@ -177,8 +282,6 @@ impl<'a> ToCkbSubCommand<'a> {
                     .parse(&input)
             })
             .transpose()?;
-        // let to_capacity: u64 = CapacityParser.parse(&capacity)?.into();
-        // let to_capacity: u64 = pledge.parse().map_err(|_e| "parse pledge error".to_owned())?;
         let to_capacity = pledge * 100_000_000;
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let receiving_address_length: u32 = derive_receiving_address_length
@@ -367,11 +470,27 @@ impl<'a> ToCkbSubCommand<'a> {
             )?;
         }
         let lockscript_out_point = OutPoint::new_builder()
-            .tx_hash(Byte32::from_slice(&hex::decode("24530a24a5711c2e017631b3afc4adf25e55d9af31b22eff7e455f65642a4c09").unwrap()).unwrap())
+            .tx_hash(
+                Byte32::from_slice(
+                    &hex::decode(
+                        "24530a24a5711c2e017631b3afc4adf25e55d9af31b22eff7e455f65642a4c09",
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
             .index(0u32.pack())
             .build();
         let typescript_out_point = OutPoint::new_builder()
-            .tx_hash(Byte32::from_slice(&hex::decode("786e51c239122e96b1e44496f8c30012d0f7099917e69dd938523b125a46e354").unwrap()).unwrap())
+            .tx_hash(
+                Byte32::from_slice(
+                    &hex::decode(
+                        "786e51c239122e96b1e44496f8c30012d0f7099917e69dd938523b125a46e354",
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
             .index(0u32.pack())
             .build();
         let typescript_cell_dep = CellDep::new_builder()
@@ -382,14 +501,17 @@ impl<'a> ToCkbSubCommand<'a> {
             .out_point(lockscript_out_point)
             .dep_type(DepType::Code.into())
             .build();
-        helper.transaction = helper.transaction.as_advanced_builder()
+        helper.transaction = helper
+            .transaction
+            .as_advanced_builder()
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();
         let toCKB_data = ToCKBCellData::new_builder()
             .status(Byte::new(tockb_cell::ToCKBStatus::Initial.int_value()))
             .lot_size(Byte::new(lot_size))
-            .build().as_bytes();
+            .build()
+            .as_bytes();
         check_capacity(to_capacity, toCKB_data.len())?;
         let typescript = Script::new_builder()
             .code_hash(Byte32::from_slice(TOCKB_TYPESCRIPT_HASH.as_ref()).unwrap())
@@ -429,7 +551,7 @@ impl<'a> ToCkbSubCommand<'a> {
             )
         };
         for (lock_arg, signature) in
-        helper.sign_inputs(signer, &mut get_live_cell_fn, skip_check)?
+            helper.sign_inputs(signer, &mut get_live_cell_fn, skip_check)?
         {
             helper.add_signature(lock_arg, signature)?;
         }
@@ -477,11 +599,11 @@ impl<'a> ToCkbSubCommand<'a> {
         mut func: F,
         fast_mode: bool,
     ) -> Result<(LiveCells, Option<(u32, u64)>), String>
-        where
-            F: FnMut(
-                &IndexDatabase,
-                &mut dyn FnMut(usize, &LiveCellInfo) -> (bool, bool),
-            ) -> Vec<LiveCellInfo>,
+    where
+        F: FnMut(
+            &IndexDatabase,
+            &mut dyn FnMut(usize, &LiveCellInfo) -> (bool, bool),
+        ) -> Vec<LiveCellInfo>,
     {
         let (infos, total_count, total_capacity, current_count, current_capacity) =
             self.with_db(|db| {
@@ -532,17 +654,157 @@ impl<'a> ToCkbSubCommand<'a> {
             total,
         ))
     }
+
+    fn supply_capacity(
+        &mut self,
+        helper: &mut TxHelper,
+        tx_fee: u64,
+        privkey_path: String,
+        skip_check: bool,
+    ) -> Result<TransactionView, String> {
+        let network_type = get_network_type(self.rpc_client)?;
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+        let lock_hash = Script::from(&from_address_payload).calc_script_hash();
+        let from_address = Address::new(network_type, from_address_payload.clone());
+
+        if self.wait_for_sync {
+            sync_to_tip(&self.index_controller)?;
+        }
+        let max_mature_number = get_max_mature_number(self.rpc_client)?;
+        let index_dir = self.index_dir.clone();
+        let genesis_info = self.genesis_info()?;
+        self.with_db(|_| ())?;
+
+        let mut live_cell_cache: HashMap<(OutPoint, bool), (CellOutput, Bytes)> =
+            Default::default();
+        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+            get_live_cell_with_cache(&mut live_cell_cache, self.rpc_client, out_point, with_data)
+                .map(|(output, _)| output)
+        };
+        let from_capacity: u64 = helper
+            .transaction
+            .inputs()
+            .into_iter()
+            .map(|input| {
+                let cap: u64 = get_live_cell_fn(input.previous_output(), false)
+                    .expect("input not exist")
+                    .capacity()
+                    .unpack();
+                cap
+            })
+            .sum();
+        let to_capacity: u64 = helper
+            .transaction
+            .outputs()
+            .into_iter()
+            .map(|output| {
+                let cap: u64 = output.capacity().unpack();
+                cap
+            })
+            .sum();
+
+        let genesis_hash = genesis_info.header().hash();
+        let genesis_info_clone = genesis_info.clone();
+        let mut from_capacity = from_capacity;
+        let mut infos: Vec<LiveCellInfo> = Default::default();
+        let mut terminator = |_, info: &LiveCellInfo| {
+            if from_capacity >= to_capacity + tx_fee {
+                (true, false)
+            } else if info.type_hashes.is_none()
+                && info.data_bytes == 0
+                && is_mature(info, max_mature_number)
+            {
+                from_capacity += info.capacity;
+                infos.push(info.clone());
+                (from_capacity >= to_capacity + tx_fee, false)
+            } else {
+                (false, false)
+            }
+        };
+        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
+            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
+                .map(|db| {
+                    db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
+                })
+                .map_err(Into::into)
+        }) {
+            return Err(format!(
+                "Index database may not ready, sync process: {}, error: {}",
+                self.index_controller.state().read().to_string(),
+                err.to_string(),
+            ));
+        }
+
+        if tx_fee > ONE_CKB {
+            return Err("Transaction fee can not be more than 1.0 CKB".to_string());
+        }
+        if to_capacity + tx_fee > from_capacity {
+            return Err(format!(
+                "Capacity(mature) not enough: {} => {}",
+                from_address, from_capacity,
+            ));
+        }
+
+        let rest_capacity = from_capacity - to_capacity - tx_fee;
+        if rest_capacity < MIN_SECP_CELL_CAPACITY && tx_fee + rest_capacity > ONE_CKB {
+            return Err("Transaction fee can not be more than 1.0 CKB, please change to-capacity value to adjust".to_string());
+        }
+
+        for info in &infos {
+            helper.add_input(
+                info.out_point(),
+                None,
+                &mut get_live_cell_fn,
+                &genesis_info,
+                skip_check,
+            )?;
+        }
+        if rest_capacity >= MIN_SECP_CELL_CAPACITY {
+            let change_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(rest_capacity).pack())
+                .lock((&from_address_payload).into())
+                .build();
+            helper.add_output(change_output, Bytes::default());
+        }
+        let signer = get_privkey_signer(from_privkey);
+        for (lock_arg, signature) in
+            helper.sign_inputs(signer, &mut get_live_cell_fn, skip_check)?
+        {
+            helper.add_signature(lock_arg, signature)?;
+        }
+        let tx = helper.build_tx(&mut get_live_cell_fn, skip_check)?;
+        Ok(tx)
+    }
 }
 
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
     fn process(&mut self, matches: &ArgMatches, debug: bool) -> Result<Output, String> {
+        let config_path = matches.value_of("config-path").unwrap().to_string();
         match matches.subcommand() {
+            ("deploy", Some(m)) => {
+                let args = DeployRequestArgs {
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                    lockscript_path: get_arg_value(m, "lockscript-path")?,
+                    typescript_path: get_arg_value(m, "typescript-path")?,
+                    privkey_path: get_arg_value(m, "privkey-path")?,
+                    config_path,
+                };
+                self.deploy(args, false).map_err(|e| format!("{:?}", e))
+            }
+            ("bonding", Some(m)) => todo!(),
             ("deposit_request", Some(m)) => {
-                let to_data = get_to_data(m)?;
                 let args = DepositRequestArgs {
-                    pledge: get_arg_value(m,"pledge")?.parse().map_err(|_e| "parse pledge error".to_owned())?,
-                    kind: get_arg_value(m,"kind")?.parse().map_err(|_e| "parse kind error".to_owned())?,
-                    lot_size: get_arg_value(m,"lot_size")?.parse().map_err(|_e| "parse lot_size error".to_owned())?,
+                    pledge: get_arg_value(m, "pledge")?
+                        .parse()
+                        .map_err(|_e| "parse pledge error".to_owned())?,
+                    kind: get_arg_value(m, "kind")?
+                        .parse()
+                        .map_err(|_e| "parse kind error".to_owned())?,
+                    lot_size: get_arg_value(m, "lot_size")?
+                        .parse()
+                        .map_err(|_e| "parse lot_size error".to_owned())?,
                     privkey_path: m.value_of("privkey-path").map(|s| s.to_string()),
                     from_account: m.value_of("from-account").map(|s| s.to_string()),
                     from_locked_address: m.value_of("from-locked-address").map(|s| s.to_string()),
@@ -634,6 +896,15 @@ fn get_keystore_signer(
             }
         },
     )
+}
+
+#[derive(Clone, Debug)]
+pub struct DeployRequestArgs {
+    pub privkey_path: String,
+    pub lockscript_path: String,
+    pub typescript_path: String,
+    pub config_path: String,
+    pub tx_fee: String,
 }
 
 #[derive(Clone, Debug)]

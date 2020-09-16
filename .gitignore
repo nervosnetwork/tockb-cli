@@ -5,3 +5,4 @@ test/Cargo.lock
 /devtools/ci/travis-secret.asc
 privkeys/
 .tockb-cli/
+.tockb-config.toml

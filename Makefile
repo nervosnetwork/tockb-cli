@@ -1,3 +1,12 @@
+TOCKB_CLI := ./target/debug/tockb-cli
+
+test-tockb-cli:
+	${TOCKB_CLI} tockb init -f
+	${TOCKB_CLI} tockb deploy --tx-fee 0.1 --privkey-path privkeys/0
+	${TOCKB_CLI} tockb dev-deploy-sudt --privkey-path privkeys/0
+	${TOCKB_CLI} tockb dev-set-price-oracle --privkey-path privkeys/0 --price 10000
+	cat .tockb-config.toml
+
 fmt:
 	cargo fmt --all -- --check
 	cd test && cargo fmt --all -- --check

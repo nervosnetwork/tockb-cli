@@ -114,10 +114,29 @@ impl<'a> ToCkbSubCommand<'a> {
                     .long("config-path")
                     .short('c')
                     .takes_value(true)
-                    .default_value(".tockb-cli")
+                    .default_value(".tockb-config.toml")
                     .about("tockb config path"),
             )
             .subcommands(vec![
+                App::new("init").about("init tockb config").arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .short('f')
+                        .about("force init config, it may overwrite existing one"),
+                ),
+                App::new("dev-deploy-sudt")
+                    .about("init tockb config, should only be used for development")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(
+                        Arg::with_name("sudt-path")
+                            .long("sudt-path")
+                            .takes_value(true)
+                            .default_value("../tests/deps/simple_udt"),
+                    ),
+                App::new("dev-set-price-oracle")
+                    .about("set price oracle and write the outpoint to config")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(Arg::with_name("price").long("price").takes_value(true)),
                 App::new("deploy")
                     .about("deploy toCKB scripts")
                     .arg(arg::privkey_path().required(true))
@@ -158,13 +177,99 @@ impl<'a> ToCkbSubCommand<'a> {
             ])
     }
 
-    pub fn deploy(&mut self, args: DeployRequestArgs, skip_check: bool) -> Result<Output, String> {
+    pub fn set_price_oracle(&mut self, args: SetPriceOracleArgs) -> Result<Output, String> {
+        let SetPriceOracleArgs {
+            price,
+            config_path,
+            privkey_path,
+            skip_check,
+        } = args;
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+
+        let to_capacity = Capacity::bytes(100)
+            .map_err(|e| format!("{}", e))?
+            .as_u64();
+        let output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_capacity).pack())
+            .lock((&from_address_payload).into())
+            .build();
+        let mut helper = TxHelper::default();
+        helper.add_output(output, price.to_le_bytes().to_vec().into());
+        let tx_fee: u64 = CapacityParser.parse("0.0001")?.into();
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        let mut settings = Settings::new(&config_path)
+            .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
+        settings.price_oracle.outpoint = OutpointConf {
+            tx_hash: tx_hash.to_string(),
+            index: 0,
+        };
+        settings.write(&config_path)?;
+        Ok(Output::new_output(format!(
+            "price oracle config written to {:?}",
+            &config_path
+        )))
+    }
+    pub fn deploy_sudt(&mut self, args: DeploySudtArgs) -> Result<Output, String> {
+        let DeploySudtArgs {
+            sudt_path,
+            config_path,
+            privkey_path,
+            skip_check,
+        } = args;
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+
+        let sudt_bin = std::fs::read(&sudt_path).map_err(|e| format!("{}", e))?;
+        let sudt_code_hash = blake2b_256(&sudt_bin);
+        let extra_capacity = 62;
+        let to_capacity = Capacity::bytes(sudt_bin.len() + extra_capacity)
+            .map_err(|e| format!("{}", e))?
+            .as_u64();
+        let sudt_output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_capacity).pack())
+            .lock((&from_address_payload).into())
+            .build();
+        let mut helper = TxHelper::default();
+        helper.add_output(sudt_output, sudt_bin.into());
+        let tx_fee: u64 = CapacityParser.parse("0.0001")?.into();
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        let mut settings = Settings::new(&config_path)
+            .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
+        settings.sudt_script = ScriptConf {
+            code_hash: hex::encode(&sudt_code_hash),
+            outpoint: OutpointConf {
+                tx_hash: tx_hash.to_string(),
+                index: 0,
+            },
+        };
+        settings.write(&config_path)?;
+        Ok(Output::new_output(format!(
+            "sudt config written to {:?}",
+            &config_path
+        )))
+    }
+
+    pub fn deploy(&mut self, args: DeployRequestArgs) -> Result<Output, String> {
         let DeployRequestArgs {
             lockscript_path,
             typescript_path,
             config_path,
             tx_fee,
             privkey_path,
+            skip_check,
         } = args;
 
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
@@ -200,28 +305,30 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        let mut settings = Settings::new(&config_path)
+            .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
+        settings.lockscript = ScriptConf {
+            code_hash: hex::encode(&lockscript_code_hash),
+            outpoint: OutpointConf {
+                tx_hash: tx_hash.to_string(),
+                index: 1,
+            },
+        };
+        settings.typescript = ScriptConf {
+            code_hash: hex::encode(&typescript_code_hash),
+            outpoint: OutpointConf {
+                tx_hash: tx_hash.to_string(),
+                index: 0,
+            },
+        };
         let resp = ScriptsConf {
-            typescript: ScriptConf {
-                code_hash: hex::encode(&typescript_code_hash),
-                outpoint: OutpointConf {
-                    tx_hash: tx_hash.to_string(),
-                    index: 0,
-                },
-            },
-            lockscript: ScriptConf {
-                code_hash: hex::encode(&lockscript_code_hash),
-                outpoint: OutpointConf {
-                    tx_hash: tx_hash.to_string(),
-                    index: 1,
-                },
-            },
+            typescript: settings.typescript.clone(),
+            lockscript: settings.lockscript.clone(),
         };
         let s = toml::to_string(&resp).expect("toml serde error");
         println!("scripts config: \n\n{}", &s);
-        std::fs::create_dir_all(&config_path).expect("failed to create dir");
-        let path = std::path::Path::new(&config_path).join("scripts.toml");
-        std::fs::write(&path, &s).expect("fail to write scripts config");
-        println!("scripts config written to {:?}", &path);
+        settings.write(&config_path)?;
+        println!("scripts config written to {:?}", &config_path);
         Ok(Output::new_output("deploy finished!"))
     }
 
@@ -673,8 +780,38 @@ impl<'a> ToCkbSubCommand<'a> {
 
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
     fn process(&mut self, matches: &ArgMatches, debug: bool) -> Result<Output, String> {
-        let config_path = matches.value_of("config-path").unwrap().to_string();
+        let config_path = get_arg_value(matches, "config-path")?;
         match matches.subcommand() {
+            ("init", Some(m)) => {
+                if std::path::Path::new(&config_path).exists() && !m.is_present("force") {
+                    return Err(format!("tockb config already exists at {}, use `-f` in command if you want to overwrite it", &config_path));
+                }
+                Settings::default().write(&config_path)?;
+                Ok(Output::new_output(format!(
+                    "tockb config written to {}",
+                    config_path
+                )))
+            }
+            ("dev-deploy-sudt", Some(m)) => {
+                let args = DeploySudtArgs {
+                    config_path,
+                    sudt_path: get_arg_value(m, "sudt-path")?,
+                    privkey_path: get_arg_value(m, "privkey-path")?,
+                    skip_check: false,
+                };
+                self.deploy_sudt(args)
+            }
+            ("dev-set-price-oracle", Some(m)) => {
+                let args = SetPriceOracleArgs {
+                    config_path,
+                    privkey_path: get_arg_value(m, "privkey-path")?,
+                    skip_check: false,
+                    price: get_arg_value(m, "price")?
+                        .parse()
+                        .map_err(|e| format!("parse price error: {}", e))?,
+                };
+                self.set_price_oracle(args)
+            }
             ("deploy", Some(m)) => {
                 let args = DeployRequestArgs {
                     tx_fee: get_arg_value(m, "tx-fee")?,
@@ -682,8 +819,9 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     typescript_path: get_arg_value(m, "typescript-path")?,
                     privkey_path: get_arg_value(m, "privkey-path")?,
                     config_path,
+                    skip_check: false,
                 };
-                self.deploy(args, false).map_err(|e| format!("{:?}", e))
+                self.deploy(args)
             }
             ("deposit_request", Some(m)) => {
                 let settings = Settings::new(&config_path).map_err(|e| {
@@ -793,12 +931,29 @@ fn get_keystore_signer(
 }
 
 #[derive(Clone, Debug)]
+pub struct SetPriceOracleArgs {
+    pub privkey_path: String,
+    pub config_path: String,
+    pub skip_check: bool,
+    pub price: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeploySudtArgs {
+    pub privkey_path: String,
+    pub sudt_path: String,
+    pub config_path: String,
+    pub skip_check: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct DeployRequestArgs {
     pub privkey_path: String,
     pub lockscript_path: String,
     pub typescript_path: String,
     pub config_path: String,
     pub tx_fee: String,
+    pub skip_check: bool,
 }
 
 #[derive(Clone, Debug)]

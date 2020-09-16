@@ -181,8 +181,11 @@ impl<'a> ToCkbSubCommand<'a> {
     pub fn get_price_oracle(&mut self, settings: &Settings) -> Result<(CellDep, u128), String> {
         let outpoint = OutPoint::new_builder()
             .tx_hash(
-                Byte32::from_slice(&hex::decode(&settings.price_oracle.outpoint.tx_hash).unwrap())
-                    .unwrap(),
+                Byte32::from_slice(
+                    &hex::decode(&settings.price_oracle.outpoint.tx_hash)
+                        .map_err(|e| format!("invalid price oracle config. err: {}", e))?,
+                )
+                .map_err(|e| format!("invalid price oracle config. err: {}", e))?,
             )
             .index(settings.price_oracle.outpoint.index.pack())
             .build();

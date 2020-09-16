@@ -972,12 +972,23 @@ impl<'a> ToCkbSubCommand<'a> {
             )
             .index(settings.typescript.outpoint.index.pack())
             .build();
+        let price_oracle_out_point = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(settings.price_oracle.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.price_oracle.outpoint.index.pack())
+            .build();
         let typescript_cell_dep = CellDep::new_builder()
             .out_point(typescript_out_point)
             .dep_type(DepType::Code.into())
             .build();
         let lockscript_cell_dep = CellDep::new_builder()
             .out_point(lockscript_out_point)
+            .dep_type(DepType::Code.into())
+            .build();
+        let price_oracle_cell_dep = CellDep::new_builder()
+            .out_point(price_oracle_out_point)
             .dep_type(DepType::Code.into())
             .build();
         helper.transaction = helper

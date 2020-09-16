@@ -21,6 +21,7 @@ use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
 use crate::plugin::{KeyStoreHandler, PluginManager, SignTarget};
 pub use crate::subcommands::wallet::start_index_thread;
 use crate::subcommands::{CliSubCommand, Output};
+use crate::utils::other::get_live_cell;
 use crate::utils::{
     arg,
     arg_parser::{
@@ -177,6 +178,25 @@ impl<'a> ToCkbSubCommand<'a> {
             ])
     }
 
+    pub fn get_price_oracle(&mut self, settings: &Settings) -> Result<(CellDep, u128), String> {
+        let outpoint = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(&settings.price_oracle.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.price_oracle.outpoint.index.pack())
+            .build();
+        let cell_dep = CellDep::new_builder()
+            .out_point(outpoint.clone())
+            .dep_type(DepType::Code.into())
+            .build();
+        let cell = get_live_cell(self.rpc_client, outpoint, true)?;
+        let mut buf = [0u8; 16];
+        buf.copy_from_slice(cell.1.as_ref());
+        let price = u128::from_le_bytes(buf);
+        Ok((cell_dep, price))
+    }
+
     pub fn set_price_oracle(&mut self, args: SetPriceOracleArgs) -> Result<Output, String> {
         let SetPriceOracleArgs {
             price,
@@ -188,9 +208,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
         let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
 
-        let to_capacity = Capacity::bytes(100)
-            .map_err(|e| format!("{}", e))?
-            .as_u64();
+        let to_capacity = Capacity::bytes(100).map_err(|e| format!("{}", e))?.as_u64();
         let output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
             .lock((&from_address_payload).into())

@@ -6,6 +6,7 @@ test-tockb-cli:
 	${TOCKB_CLI} tockb dev-deploy-sudt --privkey-path privkeys/0
 	${TOCKB_CLI} tockb dev-set-price-oracle --privkey-path privkeys/0 --price 10000
 	cat .tockb-config.toml
+	${TOCKB_CLI} tockb deposit_request -l 1 -k 1 -p 10000 --tx-fee 0.1 --privkey-path privkeys/0 --user-lockscript-addr ckt1qyqvsv5240xeh85wvnau2eky8pwrhh4jr8ts8vyj37
 
 fmt:
 	cargo fmt --all -- --check

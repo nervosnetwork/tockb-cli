@@ -388,19 +388,20 @@ impl<'a> ToCkbSubCommand<'a> {
             .build()
             .as_bytes();
         check_capacity(to_capacity, tockb_data.len())?;
-        let lockscript_hash =
+        let lockscript_code_hash =
             hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_hash =
+        let typescript_code_hash =
             hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
         let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&typescript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
             .args(vec![kind].pack())
             .build();
+        let typescript_hash = typescript.calc_script_hash();
         let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&lockscript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(typescript_hash.pack())
+            .args(typescript_hash.as_bytes().pack())
             .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())

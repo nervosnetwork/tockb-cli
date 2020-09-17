@@ -167,8 +167,7 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(arg::tx_fee().required(true))
                     .arg(Arg::from("--lock_address=[lock_address] 'lock_address'"))
                     .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
-                    .arg(Arg::from("--original_tx_hash=[original_tx_hash] 'original_tx_hash'"))
-                    .arg(Arg::from("--original_tx_output_index=[original_tx_output_index] 'original_tx_output_index'"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
                     .arg(Arg::from("-k --kind=[kind] 'kind'")),
             ])
     }
@@ -397,19 +396,21 @@ impl<'a> ToCkbSubCommand<'a> {
             .build()
             .as_bytes();
         check_capacity(to_capacity, tockb_data.len())?;
-        let lockscript_hash =
+        let lockscript_code_hash =
             hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_hash =
+        let typescript_code_hash =
             hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
         let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&typescript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
             .args(vec![kind].pack())
             .build();
+
+        let typescript_hash = typescript.calc_script_hash();
         let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&lockscript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(typescript_hash.pack())
+            .args(typescript_hash.as_bytes().pack())
             .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
@@ -437,51 +438,25 @@ impl<'a> ToCkbSubCommand<'a> {
             tx_fee,
 
             kind,
-            original_tx_hash,
-            original_tx_output_index,
+            cell,
             signer_lockscript_addr,
             lock_address,
         } = args;
 
-        let genesis_info = self.genesis_info()?;
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script = Address::from_str(&signer_lockscript_addr)?.payload().into();
 
         let mut helper = TxHelper::default();
 
-        dbg!(original_tx_hash.clone());
-        let original_tx_outpoint = OutPoint::new_builder().index(original_tx_output_index.pack()).tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap())
-            .unwrap()).build();
-        let cell = get_live_cell(
-            self.rpc_client,
-            original_tx_outpoint.clone(),
-            true,
-        )?;
-        dbg!(cell.clone());
+        let cell = self.get_ckb_cell(&mut helper, cell, true)?;
 
         let ckb_cell = cell.0;
         let ckb_cell_data = cell.1;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
-        dbg!(input_capacity);
 
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
-        let to_capacity = (input_capacity as u128 + from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 / price * 100_000_000) as u64;
-        dbg!(to_capacity);
-
-        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
-            get_live_cell(self.rpc_client, out_point, with_data)
-                .map(|(output, _)| output)
-        };
-
-        helper.add_input(
-            original_tx_outpoint.clone(),
-            None,
-            &mut get_live_cell_fn,
-            &genesis_info,
-            skip_check,
-        )?;
-        dbg!("finish");
+        let to_capacity = (input_capacity as u128 + 2 * 200 * 100_000_000 + from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 * 150 / (100 * price) * 100_000_000) as u64;
 
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
@@ -530,26 +505,29 @@ impl<'a> ToCkbSubCommand<'a> {
             .build()
             .as_bytes();
         check_capacity(to_capacity, tockb_data.len())?;
-        let lockscript_hash =
+
+        let lockscript_code_hash =
             hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_hash =
+        let typescript_code_hash =
             hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
         let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&typescript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
             .args(vec![kind].pack())
             .build();
+
+        let typescript_hash = typescript.calc_script_hash();
         let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&lockscript_hash).unwrap())
+            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(typescript_hash.pack())
+            .args(typescript_hash.as_bytes().pack())
             .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
             .type_(Some(typescript).pack())
             .lock(lockscript)
             .build();
-        helper.add_output(to_output, tockb_data);
+        helper.add_output(to_output, tockb_data.clone());
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
         let tx_hash = self
             .rpc_client
@@ -673,13 +651,48 @@ impl<'a> ToCkbSubCommand<'a> {
             helper.add_output(change_output, Bytes::default());
         }
         let signer = get_privkey_signer(from_privkey);
+
         for (lock_arg, signature) in
             helper.sign_inputs(signer, &mut get_live_cell_fn, skip_check)?
         {
             helper.add_signature(lock_arg, signature)?;
         }
+
         let tx = helper.build_tx(&mut get_live_cell_fn, skip_check)?;
+
         Ok(tx)
+    }
+
+    fn get_ckb_cell(& mut self, helper: &mut TxHelper, cell: String, add_to_input: bool) -> Result<(CellOutput, Bytes), String> {
+        let parts: Vec<_> = cell.split('.').collect();
+        let original_tx_hash: String = parts[0].to_string();
+        let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
+
+        let original_tx_outpoint = OutPoint::new_builder().index(original_tx_output_index.pack()).tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap())
+            .unwrap()).build();
+
+        if add_to_input {
+            let genesis_info = self.genesis_info()?;
+
+            let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+                get_live_cell(self.rpc_client, out_point, with_data)
+                    .map(|(output, _)| output)
+            };
+
+            helper.add_input(
+                original_tx_outpoint.clone(),
+                None,
+                &mut get_live_cell_fn,
+                &genesis_info,
+                true,
+            )?;
+        }
+
+        get_live_cell(
+            self.rpc_client,
+            original_tx_outpoint,
+            true,
+        )
     }
 }
 
@@ -760,12 +773,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;
                 let args = BondingArgs {
-                    original_tx_hash: get_arg_value(m, "original_tx_hash")?
-                        .parse()
-                        .map_err(|_e| "parse original_tx_hash error".to_owned())?,
-                    original_tx_output_index: get_arg_value(m, "original_tx_output_index")?
-                        .parse()
-                        .map_err(|_e| "parse original_tx_output_index error".to_owned())?,
+                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
                     lock_address: get_arg_value(m, "lock_address").map(|s| s.to_string())?,
                     signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr").map(|s| s.to_string())?,
                     kind: get_arg_value(m, "kind")?
@@ -774,7 +782,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
                 };
-                let tx = self.bonding(args, false, settings)?;
+                let tx = self.bonding(args, true, settings)?;
                 if debug {
                     let rpc_tx_view = json_types::TransactionView::from(tx);
                     Ok(Output::new_output(rpc_tx_view))
@@ -830,8 +838,7 @@ pub struct BondingArgs {
     pub tx_fee: String,
 
     pub kind: u8,
-    pub original_tx_hash: String,
-    pub original_tx_output_index: u32,
+    pub cell: String,
 
     pub lock_address: String,
     pub signer_lockscript_addr: String,

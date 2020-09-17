@@ -191,7 +191,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let mut buf = [0u8; 16];
         buf.copy_from_slice(cell.1.as_ref());
-
         let price = u128::from_le_bytes(buf);
         Ok((cell_dep, price))
     }
@@ -443,7 +442,8 @@ impl<'a> ToCkbSubCommand<'a> {
         } = args;
 
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
-        let signer_lockscript: Script = Address::from_str(&signer_lockscript_addr)?.payload().into();
+        let signer_lockscript: Script =
+            Address::from_str(&signer_lockscript_addr)?.payload().into();
 
         let mut helper = TxHelper::default();
 
@@ -455,7 +455,11 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
-        let to_capacity = (input_capacity as u128 + 2 * 200 * 100_000_000 + from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 * 150 / (100 * price) * 100_000_000) as u64;
+        let to_capacity = (input_capacity as u128
+            + 2 * 200 * 100_000_000
+            + from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 * 150
+                / (100 * price)
+                * 100_000_000) as u64;
 
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
@@ -490,16 +494,18 @@ impl<'a> ToCkbSubCommand<'a> {
             .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
             .lot_size(from_ckb_cell_data.lot_size())
             .user_lockscript(from_ckb_cell_data.user_lockscript())
-            .x_lock_address(basic::Bytes::new_builder()
-                                .set(
-                                    lock_address
-                                        .as_bytes()
-                                        .iter()
-                                        .map(|c| Byte::new(*c))
-                                        .collect::<Vec<_>>()
-                                        .into(),
-                                )
-                                .build())
+            .x_lock_address(
+                basic::Bytes::new_builder()
+                    .set(
+                        lock_address
+                            .as_bytes()
+                            .iter()
+                            .map(|c| Byte::new(*c))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    )
+                    .build(),
+            )
             .signer_lockscript(basic::Script::from_slice(signer_lockscript.as_slice()).unwrap())
             .build()
             .as_bytes();
@@ -662,20 +668,26 @@ impl<'a> ToCkbSubCommand<'a> {
         Ok(tx)
     }
 
-    fn get_ckb_cell(& mut self, helper: &mut TxHelper, cell: String, add_to_input: bool) -> Result<(CellOutput, Bytes), String> {
+    fn get_ckb_cell(
+        &mut self,
+        helper: &mut TxHelper,
+        cell: String,
+        add_to_input: bool,
+    ) -> Result<(CellOutput, Bytes), String> {
         let parts: Vec<_> = cell.split('.').collect();
         let original_tx_hash: String = parts[0].to_string();
         let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
 
-        let original_tx_outpoint = OutPoint::new_builder().index(original_tx_output_index.pack()).tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap())
-            .unwrap()).build();
+        let original_tx_outpoint = OutPoint::new_builder()
+            .index(original_tx_output_index.pack())
+            .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
+            .build();
 
         if add_to_input {
             let genesis_info = self.genesis_info()?;
 
             let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
-                get_live_cell(self.rpc_client, out_point, with_data)
-                    .map(|(output, _)| output)
+                get_live_cell(self.rpc_client, out_point, with_data).map(|(output, _)| output)
             };
 
             helper.add_input(
@@ -687,11 +699,7 @@ impl<'a> ToCkbSubCommand<'a> {
             )?;
         }
 
-        get_live_cell(
-            self.rpc_client,
-            original_tx_outpoint,
-            true,
-        )
+        get_live_cell(self.rpc_client, original_tx_outpoint, true)
     }
 }
 
@@ -774,7 +782,8 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                 let args = BondingArgs {
                     cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
                     lock_address: get_arg_value(m, "lock_address").map(|s| s.to_string())?,
-                    signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr").map(|s| s.to_string())?,
+                    signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr")
+                        .map(|s| s.to_string())?,
                     kind: get_arg_value(m, "kind")?
                         .parse()
                         .map_err(|_e| "parse kind error".to_owned())?,

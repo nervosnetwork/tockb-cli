@@ -168,8 +168,7 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(arg::tx_fee().required(true))
                     .arg(Arg::from("--lock_address=[lock_address] 'lock_address'"))
                     .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
-                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
-                    .arg(Arg::from("-k --kind=[kind] 'kind'")),
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
 
@@ -436,7 +435,6 @@ impl<'a> ToCkbSubCommand<'a> {
             privkey_path,
             tx_fee,
 
-            kind,
             cell,
             signer_lockscript_addr,
             lock_address,
@@ -454,14 +452,17 @@ impl<'a> ToCkbSubCommand<'a> {
         let ckb_cell_data = cell.1;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
 
+        let type_script = ckb_cell.type_().to_opt().expect("should return ckb type script");
+        let lock_script = ckb_cell.lock();
+        let kind: u8 = type_script.args().as_bytes()[0];
         let data_view = ToCKBCellDataView::new(
             ckb_cell_data.as_ref(),
             XChainKind::from_int(kind).unwrap(),
-        ).ok().unwrap();
+        ).map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;;
 
-        let sudt_amount = data_view.get_lot_xt_amount().ok().unwrap();
+        let sudt_amount = data_view.get_lot_xt_amount().expect("should get_lot_xt_amount");
 
-        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).expect("should parse ToCKBCellData correct");
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
             + 2 * 200 * 100_000_000
@@ -519,26 +520,10 @@ impl<'a> ToCkbSubCommand<'a> {
             .as_bytes();
         check_capacity(to_capacity, tockb_data.len())?;
 
-        let lockscript_code_hash =
-            hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_code_hash =
-            hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
-        let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
-            .hash_type(DepType::Code.into())
-            .args(vec![kind].pack())
-            .build();
-
-        let typescript_hash = typescript.calc_script_hash();
-        let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
-            .hash_type(DepType::Code.into())
-            .args(typescript_hash.as_bytes().pack())
-            .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
-            .type_(Some(typescript).pack())
-            .lock(lockscript)
+            .type_(Some(type_script).pack())
+            .lock(lock_script)
             .build();
         helper.add_output(to_output, tockb_data.clone());
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
@@ -792,9 +777,6 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     lock_address: get_arg_value(m, "lock_address").map(|s| s.to_string())?,
                     signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr")
                         .map(|s| s.to_string())?,
-                    kind: get_arg_value(m, "kind")?
-                        .parse()
-                        .map_err(|_e| "parse kind error".to_owned())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
                 };
@@ -853,7 +835,6 @@ pub struct BondingArgs {
     pub privkey_path: String,
     pub tx_fee: String,
 
-    pub kind: u8,
     pub cell: String,
 
     pub lock_address: String,

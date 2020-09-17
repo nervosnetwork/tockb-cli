@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tockb_types::{
     generated::{basic, tockb_cell_data::ToCKBCellData},
     tockb_cell,
+    tockb_cell::{ToCKBCellDataView, XChainKind},
 };
 
 use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -157,12 +158,17 @@ impl<'a> ToCkbSubCommand<'a> {
                     .about("create a cell to request deposit")
                     .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--user-lockscript-addr=[user-lockscript-addr] 'user-lockscript-addr'"))
                     .arg(Arg::from("-p --pledge=[pledge] 'pledge'"))
                     .arg(Arg::from("-l --lot_size=[lot_size] 'lot_size'"))
-                    .arg(Arg::from("-k --kind=[kind] 'kind'"))
-                    .arg(Arg::from(
-                        "-u --user-lockscript-addr=[user-lockscript-addr] 'user-lockscript-addr'",
-                    )),
+                    .arg(Arg::from("-k --kind=[kind] 'kind'")),
+                App::new("bonding")
+                    .about("bonding signer")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--lock_address=[lock_address] 'lock_address'"))
+                    .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
 
@@ -182,6 +188,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .dep_type(DepType::Code.into())
             .build();
         let cell = get_live_cell(self.rpc_client, outpoint, true)?;
+
         let mut buf = [0u8; 16];
         buf.copy_from_slice(cell.1.as_ref());
         let price = u128::from_le_bytes(buf);
@@ -418,6 +425,105 @@ impl<'a> ToCkbSubCommand<'a> {
         Ok(tx)
     }
 
+    pub fn bonding(
+        &mut self,
+        args: BondingArgs,
+        skip_check: bool,
+        settings: Settings,
+    ) -> Result<TransactionView, String> {
+        let BondingArgs {
+            privkey_path,
+            tx_fee,
+
+            cell,
+            signer_lockscript_addr,
+            lock_address,
+        } = args;
+
+        let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
+        let signer_lockscript: Script =
+            Address::from_str(&signer_lockscript_addr)?.payload().into();
+
+        let mut helper = TxHelper::default();
+
+        let (ckb_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let input_capacity: u64 = ckb_cell.capacity().unpack();
+
+        let type_script = ckb_cell
+            .type_()
+            .to_opt()
+            .expect("should return ckb type script");
+        let lock_script = ckb_cell.lock();
+        let kind: u8 = type_script.args().as_bytes()[0];
+        let data_view: ToCKBCellDataView =
+            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
+                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+
+        let sudt_amount: u128 = data_view
+            .get_lot_xt_amount()
+            .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
+        let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
+        let to_capacity = (input_capacity as u128
+            + 2 * 200 * 100_000_000
+            + sudt_amount * 150 / (100 * price) * 100_000_000) as u64;
+
+        let lockscript_out_point = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.lockscript.outpoint.index.pack())
+            .build();
+        let typescript_out_point = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(settings.typescript.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.typescript.outpoint.index.pack())
+            .build();
+        let typescript_cell_dep = CellDep::new_builder()
+            .out_point(typescript_out_point)
+            .dep_type(DepType::Code.into())
+            .build();
+        let lockscript_cell_dep = CellDep::new_builder()
+            .out_point(lockscript_out_point)
+            .dep_type(DepType::Code.into())
+            .build();
+        helper.transaction = helper
+            .transaction
+            .as_advanced_builder()
+            .cell_dep(price_oracle_dep)
+            .cell_dep(typescript_cell_dep)
+            .cell_dep(lockscript_cell_dep)
+            .build();
+
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref())
+            .expect("should parse ToCKBCellData correct");
+        let tockb_data = ToCKBCellData::new_builder()
+            .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
+            .lot_size(from_ckb_cell_data.lot_size())
+            .user_lockscript(from_ckb_cell_data.user_lockscript())
+            .x_lock_address(lock_address.as_bytes().to_vec().into())
+            .signer_lockscript(basic::Script::from_slice(signer_lockscript.as_slice()).unwrap())
+            .build()
+            .as_bytes();
+        check_capacity(to_capacity, tockb_data.len())?;
+
+        let to_output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_capacity).pack())
+            .type_(Some(type_script).pack())
+            .lock(lock_script)
+            .build();
+        helper.add_output(to_output, tockb_data.clone());
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        Ok(tx)
+    }
+
     fn supply_capacity(
         &mut self,
         helper: &mut TxHelper,
@@ -532,13 +638,50 @@ impl<'a> ToCkbSubCommand<'a> {
             helper.add_output(change_output, Bytes::default());
         }
         let signer = get_privkey_signer(from_privkey);
+
         for (lock_arg, signature) in
             helper.sign_inputs(signer, &mut get_live_cell_fn, skip_check)?
         {
             helper.add_signature(lock_arg, signature)?;
         }
+
         let tx = helper.build_tx(&mut get_live_cell_fn, skip_check)?;
+
         Ok(tx)
+    }
+
+    fn get_ckb_cell(
+        &mut self,
+        helper: &mut TxHelper,
+        cell: String,
+        add_to_input: bool,
+    ) -> Result<(CellOutput, Bytes), String> {
+        let parts: Vec<_> = cell.split('.').collect();
+        let original_tx_hash: String = parts[0].to_string();
+        let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
+
+        let original_tx_outpoint = OutPoint::new_builder()
+            .index(original_tx_output_index.pack())
+            .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
+            .build();
+
+        if add_to_input {
+            let genesis_info = self.genesis_info()?;
+
+            let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+                get_live_cell(self.rpc_client, out_point, with_data).map(|(output, _)| output)
+            };
+
+            helper.add_input(
+                original_tx_outpoint.clone(),
+                None,
+                &mut get_live_cell_fn,
+                &genesis_info,
+                true,
+            )?;
+        }
+
+        get_live_cell(self.rpc_client, original_tx_outpoint, true)
     }
 }
 
@@ -614,6 +757,27 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     Ok(Output::new_output(tx_hash))
                 }
             }
+            ("bonding", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
+                let args = BondingArgs {
+                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
+                    lock_address: get_arg_value(m, "lock_address").map(|s| s.to_string())?,
+                    signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr")
+                        .map(|s| s.to_string())?,
+                    privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                };
+                let tx = self.bonding(args, true, settings)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
             _ => Err(Self::subcommand().generate_usage()),
         }
     }
@@ -624,7 +788,7 @@ pub struct SetPriceOracleArgs {
     pub privkey_path: String,
     pub config_path: String,
     pub skip_check: bool,
-    pub price: u64,
+    pub price: u128,
 }
 
 #[derive(Clone, Debug)]
@@ -653,6 +817,17 @@ pub struct DepositRequestArgs {
     pub pledge: u64,
     pub lot_size: u8,
     pub kind: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct BondingArgs {
+    pub privkey_path: String,
+    pub tx_fee: String,
+
+    pub cell: String,
+
+    pub lock_address: String,
+    pub signer_lockscript_addr: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -505,15 +505,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .user_lockscript(from_ckb_cell_data.user_lockscript())
             .x_lock_address(
                 basic::Bytes::new_builder()
-                    .set(
-                        lock_address
-                            .as_bytes()
-                            .iter()
-                            .map(|c| Byte::new(*c))
-                            .collect::<Vec<_>>()
-                            .into(),
-                    )
-                    .build(),
+                lock_address.as_bytes().to_vec().into()
             )
             .signer_lockscript(basic::Script::from_slice(signer_lockscript.as_slice()).unwrap())
             .build()

@@ -19,11 +19,11 @@ use tockb_types::{
     config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
     generated::{
         basic,
-        btc_difficulty::BTCDifficulty,
+        btc_difficulty::{BTCDifficulty, BTCDifficultyReader},
         mint_xt_witness::{BTCSPVProof, MintXTWitness},
         tockb_cell_data::ToCKBCellData,
     },
-    BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
+    tockb_cell, BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
 };
 
 use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tockb_types::{
     generated::{basic, tockb_cell_data::ToCKBCellData},
     tockb_cell,
+    tockb_cell::{ToCKBCellDataView, XChainKind},
 };
 
 use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -453,11 +454,18 @@ impl<'a> ToCkbSubCommand<'a> {
         let ckb_cell_data = cell.1;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
 
+        let data_view = ToCKBCellDataView::new(
+            ckb_cell_data.as_ref(),
+            XChainKind::from_int(kind).unwrap(),
+        ).ok().unwrap();
+
+        let sudt_amount = data_view.get_lot_xt_amount().ok().unwrap();
+
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
             + 2 * 200 * 100_000_000
-            + from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 * 150
+            + sudt_amount * 150
                 / (100 * price)
                 * 100_000_000) as u64;
 

@@ -740,8 +740,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .transpose()?;
 
         /// assume price is 100_000 for now.
-        let price = 100_000;
-        let additional_to_capacity = 2 * 200 * 100_000_000;
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let receiving_address_length: u32 = derive_receiving_address_length
             .map(|input| FromStrParser::<u32>::default().parse(&input))
@@ -866,39 +864,18 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let rpc_url = self.rpc_client.url().to_string();
         let keystore = self.plugin_mgr.keystore_handler();
-        let mut live_cell_cache: HashMap<(OutPoint, bool), (CellOutput, Bytes)> =
-            Default::default();
-        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
-            get_live_cell_with_cache(&mut live_cell_cache, self.rpc_client, out_point, with_data)
-                .map(|(output, _)| output)
-        };
 
-        let original_tx_hash = FixedHashParser::<H256>::default().parse(original_tx_hash)?;
-        let original_tx_outpoint = OutPoint {
-            original_tx_hash,
-            original_tx_output_index,
-        };
-
-        /// add input to_CKB_cell
-        helper.add_input(
-            original_tx_outpoint,
-            None,
-            &mut get_live_cell_fn,
-            &genesis_info,
-            skip_check,
-        )?;
-
-        let ckb_cell_data = get_live_cell_with_cache(
-            &mut live_cell_cache,
+        let original_tx_outpoint = OutPoint::new_builder().index(original_tx_output_index.pack()).tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap())
+            .unwrap()).build();
+        let ckb_cell_data = get_live_cell(
             self.rpc_client,
-            deposit_request_outpoint,
+            original_tx_outpoint.clone(),
             true,
-        )
-        .map(|(_, data)| data)?;
-        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_slice());
-        let to_capacity = from_ckb_cell_data.lot_size() * 25_000_000 / price * 100_000_000;
-
-        ///check from to capacity
+        ).map(|(_, data)| data)?;
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
+        let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
+        let to_capacity = (from_ckb_cell_data.lot_size().as_slice()[0] as u128 * 25_000_000 / price * 100_000_000) as u64;
+        
         let max_mature_number = get_max_mature_number(self.rpc_client)?;
         let mut from_capacity = 0;
         let mut infos: Vec<LiveCellInfo> = Default::default();
@@ -948,6 +925,21 @@ impl<'a> ToCkbSubCommand<'a> {
             return Err("Transaction fee can not be more than 1.0 CKB, please change to-capacity value to adjust".to_string());
         }
 
+        let mut live_cell_cache: HashMap<(OutPoint, bool), (CellOutput, Bytes)> =
+            Default::default();
+        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+            get_live_cell_with_cache(&mut live_cell_cache, self.rpc_client, out_point, with_data)
+                .map(|(output, _)| output)
+        };
+
+        /// add input to_CKB_cell
+        helper.add_input(
+            original_tx_outpoint.clone(),
+            None,
+            &mut get_live_cell_fn,
+            &genesis_info,
+            skip_check,
+        )?;
         for info in &infos {
             helper.add_input(
                 info.out_point(),
@@ -972,13 +964,6 @@ impl<'a> ToCkbSubCommand<'a> {
             )
             .index(settings.typescript.outpoint.index.pack())
             .build();
-        let price_oracle_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(&hex::decode(settings.price_oracle.outpoint.tx_hash).unwrap())
-                    .unwrap(),
-            )
-            .index(settings.price_oracle.outpoint.index.pack())
-            .build();
         let typescript_cell_dep = CellDep::new_builder()
             .out_point(typescript_out_point)
             .dep_type(DepType::Code.into())
@@ -987,19 +972,19 @@ impl<'a> ToCkbSubCommand<'a> {
             .out_point(lockscript_out_point)
             .dep_type(DepType::Code.into())
             .build();
-        let price_oracle_cell_dep = CellDep::new_builder()
-            .out_point(price_oracle_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
         helper.transaction = helper
             .transaction
             .as_advanced_builder()
+            .cell_dep(price_oracle_dep)
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();
         let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Initial.int_value()))
-            .lot_size(Byte::new(lot_size))
+            .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
+            .lot_size(from_ckb_cell_data.lot_size())
+            .user_lockscript(from_ckb_cell_data.user_lockscript())
+            .x_lock_address(from_ckb_cell_data.x_lock_address())
+            .signer_lockscript(from_ckb_cell_data.signer_lockscript())
             .build()
             .as_bytes();
         check_capacity(to_capacity, tockb_data.len())?;
@@ -1423,7 +1408,7 @@ pub struct BondingArgs {
 
     pub kind: u8,
     pub original_tx_hash: String,
-    pub original_tx_output_index: u8,
+    pub original_tx_output_index: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

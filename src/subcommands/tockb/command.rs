@@ -201,13 +201,11 @@ impl<'a> ToCkbSubCommand<'a> {
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
         let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
 
-        let to_capacity = Capacity::bytes(100).map_err(|e| format!("{}", e))?.as_u64();
         let output = CellOutput::new_builder()
-            .capacity(Capacity::shannons(to_capacity).pack())
             .lock((&from_address_payload).into())
             .build();
         let mut helper = TxHelper::default();
-        helper.add_output(output, price.to_le_bytes().to_vec().into());
+        helper.add_output_with_auto_capacity(output, price.to_le_bytes().to_vec().into());
         let tx_fee: u64 = CapacityParser.parse("0.0001")?.into();
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
         let tx_hash = self
@@ -227,6 +225,7 @@ impl<'a> ToCkbSubCommand<'a> {
             &config_path
         )))
     }
+
     pub fn deploy_sudt(&mut self, args: DeploySudtArgs) -> Result<Output, String> {
         let DeploySudtArgs {
             sudt_path,
@@ -240,16 +239,11 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let sudt_bin = std::fs::read(&sudt_path).map_err(|e| format!("{}", e))?;
         let sudt_code_hash = blake2b_256(&sudt_bin);
-        let extra_capacity = 62;
-        let to_capacity = Capacity::bytes(sudt_bin.len() + extra_capacity)
-            .map_err(|e| format!("{}", e))?
-            .as_u64();
         let sudt_output = CellOutput::new_builder()
-            .capacity(Capacity::shannons(to_capacity).pack())
             .lock((&from_address_payload).into())
             .build();
         let mut helper = TxHelper::default();
-        helper.add_output(sudt_output, sudt_bin.into());
+        helper.add_output_with_auto_capacity(sudt_output, sudt_bin.into());
         let tx_fee: u64 = CapacityParser.parse("0.0001")?.into();
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
         let tx_hash = self
@@ -291,25 +285,16 @@ impl<'a> ToCkbSubCommand<'a> {
         let lockscript_bin = std::fs::read(&lockscript_path).map_err(|e| format!("{}", e))?;
         let typescript_code_hash = blake2b_256(&typescript_bin);
         let lockscript_code_hash = blake2b_256(&lockscript_bin);
-        let extra_capacity = 62;
-        let to_lock_capacity = Capacity::bytes(lockscript_bin.len() + extra_capacity)
-            .map_err(|e| format!("{}", e))?
-            .as_u64();
-        let to_type_capacity = Capacity::bytes(typescript_bin.len() + extra_capacity)
-            .map_err(|e| format!("{}", e))?
-            .as_u64();
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let lock_output = CellOutput::new_builder()
-            .capacity(Capacity::shannons(to_lock_capacity).pack())
             .lock((&from_address_payload).into())
             .build();
         let type_output = CellOutput::new_builder()
-            .capacity(Capacity::shannons(to_type_capacity).pack())
             .lock((&from_address_payload).into())
             .build();
         let mut helper = TxHelper::default();
-        helper.add_output(type_output, typescript_bin.into());
-        helper.add_output(lock_output, lockscript_bin.into());
+        helper.add_output_with_auto_capacity(type_output, typescript_bin.into());
+        helper.add_output_with_auto_capacity(lock_output, lockscript_bin.into());
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
         let tx_hash = self
             .rpc_client
@@ -359,7 +344,6 @@ impl<'a> ToCkbSubCommand<'a> {
             lot_size,
         } = args;
 
-        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let user_lockscript: Script = Address::from_str(&user_lockscript_addr)?.payload().into();
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let to_capacity = pledge * 100_000_000;

@@ -36,10 +36,8 @@ use crate::utils::{
 };
 use ckb_index::{with_index_db, IndexDatabase, LiveCellInfo};
 use ckb_sdk::{
-    constants::{MIN_SECP_CELL_CAPACITY, MULTISIG_TYPE_HASH, ONE_CKB},
-    wallet::DerivationPath,
-    Address, AddressPayload, GenesisInfo, HttpRpcClient, MultisigConfig, SignerFn, Since,
-    SinceType, TxHelper, SECP256K1,
+    constants::{MIN_SECP_CELL_CAPACITY, ONE_CKB},
+    Address, AddressPayload, GenesisInfo, HttpRpcClient, TxHelper, SECP256K1,
 };
 
 pub struct ToCkbSubCommand<'a> {

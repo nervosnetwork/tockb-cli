@@ -135,7 +135,7 @@ impl TxHelper {
 
     pub fn add_output_with_auto_capacity(&mut self, output: CellOutput, data: Bytes) {
         let capacity = (output.as_slice().len() - 16 + data.len()) as u64 * 100_000_000;
-        let output = output.as_builder().capacity(capacity .pack()).build();
+        let output = output.as_builder().capacity(capacity.pack()).build();
         self.add_output(output, data)
     }
 

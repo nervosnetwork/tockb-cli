@@ -41,6 +41,8 @@ use ckb_sdk::{
     Address, AddressPayload, GenesisInfo, HttpRpcClient, TxHelper, SECP256K1,
 };
 
+const TIMEOUT: u64 = 60;
+
 pub struct ToCkbSubCommand<'a> {
     rpc_client: &'a mut HttpRpcClient,
     plugin_mgr: &'a mut PluginManager,
@@ -218,6 +220,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         let mut settings = Settings::new(&config_path)
             .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
         settings.price_oracle.outpoint = OutpointConf {
@@ -256,6 +259,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         let mut settings = Settings::new(&config_path)
             .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
         settings.sudt_script = ScriptConf {
@@ -306,6 +310,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         let mut settings = Settings::new(&config_path)
             .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
         settings.lockscript = ScriptConf {
@@ -331,6 +336,24 @@ impl<'a> ToCkbSubCommand<'a> {
         settings.write(&config_path)?;
         println!("scripts config written to {:?}", &config_path);
         Ok(Output::new_output("deploy finished!"))
+    }
+
+    pub fn wait_for_commited(&mut self, tx_hash: H256, timeout: u64) -> Result<(), String> {
+        for i in 0..timeout {
+            let status = self
+                .rpc_client
+                .get_transaction(tx_hash.clone())?
+                .map(|t| t.tx_status.status);
+            println!(
+                "waiting for tx {} to be committed, loop index: {}, status: {:?}",
+                &tx_hash, i, status
+            );
+            if status == Some(json_types::Status::Committed) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        return Err(format!("tx {} not commited", &tx_hash));
     }
 
     pub fn deposit_request(
@@ -422,6 +445,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         Ok(tx)
     }
 
@@ -521,6 +545,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         Ok(tx)
     }
 

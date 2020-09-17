@@ -170,6 +170,12 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'"))
                     .arg(Arg::from("-k --kind=[kind] 'kind'")),
+                App::new("withdraw_collateral")
+                    .about("withdraw collateral")
+                    .arg(arg::privkey_path().required_unless(arg::from_account().get_name()))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
+                    .arg(Arg::from("-k --kind=[kind] 'kind'")),
             ])
     }
 
@@ -550,6 +556,127 @@ impl<'a> ToCkbSubCommand<'a> {
         Ok(tx)
     }
 
+    pub fn withdraw_collateral(
+        &mut self,
+        args: WithdrawCollateralArgs,
+        skip_check: bool,
+        settings: Settings,
+    ) -> Result<TransactionView, String> {
+        let WithdrawCollateralArgs {
+            privkey_path,
+            tx_fee,
+            kind,
+            cell,
+        } = args;
+
+        let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
+        let signer_lockscript: Script =
+            Address::from_str(&signer_lockscript_addr)?.payload().into();
+
+        let mut helper = TxHelper::default();
+
+        let cell = self.get_ckb_cell(&mut helper, cell, true)?;
+
+        let ckb_cell = cell.0;
+        let ckb_cell_data = cell.1;
+        let input_capacity: u64 = ckb_cell.capacity().unpack();
+
+        let data_view = ToCKBCellDataView::new(
+            ckb_cell_data.as_ref(),
+            XChainKind::from_int(kind).unwrap(),
+        ).ok().unwrap();
+
+        let sudt_amount = data_view.get_lot_xt_amount().ok().unwrap();
+
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
+        let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
+        let to_capacity = (input_capacity as u128
+            + 2 * 200 * 100_000_000
+            + sudt_amount * 150
+            / (100 * price)
+            * 100_000_000) as u64;
+
+        let lockscript_out_point = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.lockscript.outpoint.index.pack())
+            .build();
+        let typescript_out_point = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(&hex::decode(settings.typescript.outpoint.tx_hash).unwrap())
+                    .unwrap(),
+            )
+            .index(settings.typescript.outpoint.index.pack())
+            .build();
+        let typescript_cell_dep = CellDep::new_builder()
+            .out_point(typescript_out_point)
+            .dep_type(DepType::Code.into())
+            .build();
+        let lockscript_cell_dep = CellDep::new_builder()
+            .out_point(lockscript_out_point)
+            .dep_type(DepType::Code.into())
+            .build();
+        helper.transaction = helper
+            .transaction
+            .as_advanced_builder()
+            .cell_dep(price_oracle_dep)
+            .cell_dep(typescript_cell_dep)
+            .cell_dep(lockscript_cell_dep)
+            .build();
+        let tockb_data = ToCKBCellData::new_builder()
+            .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
+            .lot_size(from_ckb_cell_data.lot_size())
+            .user_lockscript(from_ckb_cell_data.user_lockscript())
+            .x_lock_address(
+                basic::Bytes::new_builder()
+                    .set(
+                        lock_address
+                            .as_bytes()
+                            .iter()
+                            .map(|c| Byte::new(*c))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    )
+                    .build(),
+            )
+            .signer_lockscript(basic::Script::from_slice(signer_lockscript.as_slice()).unwrap())
+            .build()
+            .as_bytes();
+        check_capacity(to_capacity, tockb_data.len())?;
+
+        let lockscript_code_hash =
+            hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
+        let typescript_code_hash =
+            hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
+        let typescript = Script::new_builder()
+            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
+            .hash_type(DepType::Code.into())
+            .args(vec![kind].pack())
+            .build();
+
+        let typescript_hash = typescript.calc_script_hash();
+        let lockscript = Script::new_builder()
+            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
+            .hash_type(DepType::Code.into())
+            .args(typescript_hash.as_bytes().pack())
+            .build();
+        let to_output = CellOutput::new_builder()
+            .capacity(Capacity::shannons(to_capacity).pack())
+            .type_(Some(typescript).pack())
+            .lock(lockscript)
+            .build();
+        helper.add_output(to_output, tockb_data.clone());
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        Ok(tx)
+    }
+
     fn supply_capacity(
         &mut self,
         helper: &mut TxHelper,
@@ -807,6 +934,27 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     Ok(Output::new_output(tx_hash))
                 }
             }
+            ("withdraw_collateral", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
+                let args = WithdrawCollateralArgs {
+                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
+                    kind: get_arg_value(m, "kind")?
+                        .parse()
+                        .map_err(|_e| "parse kind error".to_owned())?,
+                    privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                };
+                let tx = self.withdraw_collateral(args, true, settings)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
             _ => Err(Self::subcommand().generate_usage()),
         }
     }
@@ -858,6 +1006,15 @@ pub struct BondingArgs {
 
     pub lock_address: String,
     pub signer_lockscript_addr: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WithdrawCollateralArgs {
+    pub privkey_path: String,
+    pub tx_fee: String,
+
+    pub kind: u8,
+    pub cell: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -188,12 +188,11 @@ impl<'a> ToCkbSubCommand<'a> {
             .out_point(outpoint.clone())
             .dep_type(DepType::Code.into())
             .build();
-        dbg!("start");
         let cell = get_live_cell(self.rpc_client, outpoint, true)?;
-        dbg!("end");
 
         let mut buf = [0u8; 16];
         buf.copy_from_slice(cell.1.as_ref());
+
         let price = u128::from_le_bytes(buf);
         Ok((cell_dep, price))
     }
@@ -794,7 +793,7 @@ pub struct SetPriceOracleArgs {
     pub privkey_path: String,
     pub config_path: String,
     pub skip_check: bool,
-    pub price: u64,
+    pub price: u128,
 }
 
 #[derive(Clone, Debug)]

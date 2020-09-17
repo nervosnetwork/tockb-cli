@@ -164,7 +164,7 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("-k --kind=[kind] 'kind'")),
                 App::new("bonding")
                     .about("bonding signer")
-                    .arg(arg::privkey_path().required_unless(arg::from_account().get_name()))
+                    .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
                     .arg(Arg::from("--lock_address=[lock_address] 'lock_address'"))
                     .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
@@ -446,29 +446,26 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let mut helper = TxHelper::default();
 
-        let cell = self.get_ckb_cell(&mut helper, cell, true)?;
-
-        let ckb_cell = cell.0;
-        let ckb_cell_data = cell.1;
+        let (ckb_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
 
-        let type_script = ckb_cell.type_().to_opt().expect("should return ckb type script");
+        let type_script = ckb_cell
+            .type_()
+            .to_opt()
+            .expect("should return ckb type script");
         let lock_script = ckb_cell.lock();
         let kind: u8 = type_script.args().as_bytes()[0];
-        let data_view = ToCKBCellDataView::new(
-            ckb_cell_data.as_ref(),
-            XChainKind::from_int(kind).unwrap(),
-        ).map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;;
+        let data_view: ToCKBCellDataView =
+            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
+                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
 
-        let sudt_amount = data_view.get_lot_xt_amount().expect("should get_lot_xt_amount");
-
-        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).expect("should parse ToCKBCellData correct");
+        let sudt_amount: u128 = data_view
+            .get_lot_xt_amount()
+            .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
             + 2 * 200 * 100_000_000
-            + sudt_amount * 150
-                / (100 * price)
-                * 100_000_000) as u64;
+            + sudt_amount * 150 / (100 * price) * 100_000_000) as u64;
 
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
@@ -499,14 +496,14 @@ impl<'a> ToCkbSubCommand<'a> {
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();
+
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref())
+            .expect("should parse ToCKBCellData correct");
         let tockb_data = ToCKBCellData::new_builder()
             .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
             .lot_size(from_ckb_cell_data.lot_size())
             .user_lockscript(from_ckb_cell_data.user_lockscript())
-            .x_lock_address(
-                basic::Bytes::new_builder()
-                lock_address.as_bytes().to_vec().into()
-            )
+            .x_lock_address(lock_address.as_bytes().to_vec().into())
             .signer_lockscript(basic::Script::from_slice(signer_lockscript.as_slice()).unwrap())
             .build()
             .as_bytes();

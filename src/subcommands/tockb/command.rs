@@ -405,10 +405,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .hash_type(DepType::Code.into())
             .args(vec![kind].pack())
             .build();
-<<<<<<< HEAD
-
-=======
->>>>>>> upstream/develop
         let typescript_hash = typescript.calc_script_hash();
         let lockscript = Script::new_builder()
             .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())

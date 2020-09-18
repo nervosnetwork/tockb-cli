@@ -660,9 +660,8 @@ impl<'a> ToCkbSubCommand<'a> {
         dbg!(tx_fee);
 
         // add cellDeps
-        let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
-
         {
+            let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
             let lockscript_out_point = OutPoint::new_builder()
                 .tx_hash(
                     Byte32::from_slice(
@@ -715,63 +714,50 @@ impl<'a> ToCkbSubCommand<'a> {
                 .cell_dep(lockscript_cell_dep)
                 .cell_dep(sudt_typescript_dep)
                 .build();
+            dbg!("added all cellDeps: btc_difficulty_dep, typescript_cell_dep, lockscript_cell_dep, sudt_typescript_dep");
         };
-
-        dbg!("add all cellDeps: btc_difficulty_dep, typescript_cell_dep, lockscript_cell_dep, sudt_typescript_dep");
 
         // get input tockb cell and basic info
         let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
 
-        let kind: u8 = match from_cell.type_().to_opt() {
-            Some(script) => script.args().raw_data().as_ref()[0],
-            None => return Err("original_tx cell typescript is none".to_owned()),
+        let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
+            Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
+            None => return Err("typescript of tockb cell is none".to_owned()),
         };
+        let tockb_lockscript = from_cell.lock();
 
         let data_view =
             ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
-                .ok()
-                .unwrap();
+                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
         let lot_amount = data_view
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
         let from_capacity: u64 = from_cell.capacity().unpack();
 
-        // gen output tockb cell
-        let to_capacity = from_capacity - PLEDGE - XT_CELL_CAPACITY;
-        let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Warranty.int_value()))
-            .lot_size(from_ckb_cell_data.lot_size())
-            .user_lockscript(from_ckb_cell_data.user_lockscript())
-            .x_lock_address(from_ckb_cell_data.x_lock_address())
-            .signer_lockscript(from_ckb_cell_data.signer_lockscript())
-            .build()
-            .as_bytes();
-        check_capacity(to_capacity, tockb_data.len())?;
+        // gen output of tockb cell
+        {
+            let to_capacity = from_capacity - PLEDGE - XT_CELL_CAPACITY;
+            let tockb_data = ToCKBCellData::new_builder()
+                .status(Byte::new(tockb_cell::ToCKBStatus::Warranty.int_value()))
+                .lot_size(from_ckb_cell_data.lot_size())
+                .user_lockscript(from_ckb_cell_data.user_lockscript())
+                .x_lock_address(from_ckb_cell_data.x_lock_address())
+                .signer_lockscript(from_ckb_cell_data.signer_lockscript())
+                .build()
+                .as_bytes();
+            check_capacity(to_capacity, tockb_data.len())?;
 
-        let lockscript_code_hash =
-            hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
-        let typescript_code_hash =
-            hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
-        let typescript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
-            .hash_type(DepType::Code.into())
-            .args(vec![kind].pack())
-            .build();
-        let typescript_hash = typescript.calc_script_hash();
-        let lockscript = Script::new_builder()
-            .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
-            .hash_type(DepType::Code.into())
-            .args(typescript_hash.as_bytes().pack())
-            .build();
-        let to_output = CellOutput::new_builder()
-            .capacity(Capacity::shannons(to_capacity).pack())
-            .type_(Some(typescript).pack())
-            .lock(lockscript.clone())
-            .build();
-        helper.add_output(to_output, tockb_data);
+            let to_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(to_capacity).pack())
+                .type_(Some(tockb_typescript).pack())
+                .lock(tockb_lockscript.clone())
+                .build();
+            helper.add_output(to_output, tockb_data);
+            dbg!("tockb cell generated", to_capacity);
+        }
 
-        // xt cells
+        // 2 xt cells
         {
             // mint xt cell to user, amount = lot_size * (1 - signer fee rate)
             let user_lockscript = Script::from_slice(
@@ -784,7 +770,7 @@ impl<'a> ToCkbSubCommand<'a> {
             let sudt_typescript = Script::new_builder()
                 .code_hash(Byte32::from_slice(&sudt_typescript_code_hash).unwrap())
                 .hash_type(DepType::Code.into())
-                .args(lockscript.calc_script_hash().as_bytes().pack())
+                .args(tockb_lockscript.calc_script_hash().as_bytes().pack())
                 .build();
 
             let sudt_user_output = CellOutput::new_builder()
@@ -1140,7 +1126,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
                 };
-                let tx = self.mint_xt(args, false, settings)?;
+                let tx = self.mint_xt(args, true, settings)?;
                 if debug {
                     let rpc_tx_view = json_types::TransactionView::from(tx);
                     Ok(Output::new_output(rpc_tx_view))

@@ -18,12 +18,10 @@ use serde::{Deserialize, Serialize};
 use tockb_types::{
     config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, XT_CELL_CAPACITY},
     generated::{
-        basic,
-        btc_difficulty::{BTCDifficulty, BTCDifficultyReader},
-        mint_xt_witness::MintXTWitness,
+        basic, btc_difficulty::BTCDifficulty, mint_xt_witness::MintXTWitness,
         tockb_cell_data::ToCKBCellData,
     },
-    tockb_cell, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
+    ToCKBCellDataView, ToCKBStatus, XChainKind,
 };
 
 use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -186,9 +184,9 @@ impl<'a> ToCkbSubCommand<'a> {
                     .about("use a bonded toCKB cell and xchain's spv-proof to mint xt cell")
                     .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
-                    .arg(Arg::from("-k --kind=[kind] 'kind'"))
-                    .arg(Arg::from("--original_tx_hash=[original_tx_hash] 'original_tx_hash'"))
-                    .arg(Arg::from("--original_tx_output_index=[original_tx_output_index] 'original_tx_output_index'")),
+                    .arg(Arg::from("--spv-proof=[spv-proof] 'spv-proof'").required(true))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
 
@@ -497,7 +495,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .cell_dep(lockscript_cell_dep)
             .build();
         let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Initial.int_value()))
+            .status(Byte::new(ToCKBStatus::Initial.int_value()))
             .lot_size(Byte::new(lot_size))
             .user_lockscript(basic::Script::from_slice(user_lockscript.as_slice()).unwrap())
             .build()
@@ -614,7 +612,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref())
             .expect("should parse ToCKBCellData correct");
         let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
+            .status(Byte::new(ToCKBStatus::Bonded.int_value()))
             .lot_size(from_ckb_cell_data.lot_size())
             .user_lockscript(from_ckb_cell_data.user_lockscript())
             .x_lock_address(lock_address.as_bytes().to_vec().into())
@@ -654,9 +652,16 @@ impl<'a> ToCkbSubCommand<'a> {
             cell,
             spv_proof,
         } = args;
-
         dbg!("--------------begin create mint_xt tx--------------");
+        dbg!(privkey_path.clone());
+        dbg!(tx_fee.clone());
+        dbg!(cell_path.clone());
+        dbg!(spv_proof.clone());
 
+        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+            .or(cell.ok_or("cell is none".to_string()))?;
+
+        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let mut helper = TxHelper::default();
         if tx_fee > ONE_CKB {
@@ -745,7 +750,7 @@ impl<'a> ToCkbSubCommand<'a> {
         {
             let to_capacity = from_capacity - PLEDGE - XT_CELL_CAPACITY;
             let tockb_data = ToCKBCellData::new_builder()
-                .status(Byte::new(tockb_cell::ToCKBStatus::Warranty.int_value()))
+                .status(Byte::new(ToCKBStatus::Warranty.int_value()))
                 .lot_size(from_ckb_cell_data.lot_size())
                 .user_lockscript(from_ckb_cell_data.user_lockscript())
                 .x_lock_address(from_ckb_cell_data.x_lock_address())
@@ -807,6 +812,7 @@ impl<'a> ToCkbSubCommand<'a> {
 
             let to_signer_amount_data = Bytes::copy_from_slice(&to_signer.to_le_bytes()[..]);
             helper.add_output(sudt_signer_output, to_signer_amount_data);
+            dbg!("xt cells generated", to_user, to_signer);
         }
 
         // add witness
@@ -826,6 +832,7 @@ impl<'a> ToCkbSubCommand<'a> {
                 .as_advanced_builder()
                 .set_witnesses(vec![witness.as_bytes().pack()])
                 .build();
+            dbg!("finish add witness", hex::encode(witness.as_bytes()));
         }
 
         // add signature to pay tx fee
@@ -835,6 +842,9 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+
+        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -1125,11 +1135,11 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;
                 let args = MintXtArgs {
-                    spv_proof: get_arg_value(m, "spv_proof")?
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
+                    spv_proof: get_arg_value(m, "spv-proof")?
                         .parse()
                         .map_err(|_e| "parse spv_proof error".to_owned())?,
-                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
-                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
                 };
@@ -1219,7 +1229,8 @@ pub struct MintXtArgs {
     pub tx_fee: String,
 
     pub cell_path: String,
-    pub cell: String,
+    pub cell: Option<String>,
+
     pub spv_proof: String,
 }
 

@@ -756,6 +756,7 @@ impl<'a> ToCkbSubCommand<'a> {
                 .user_lockscript(from_ckb_cell_data.user_lockscript())
                 .x_lock_address(from_ckb_cell_data.x_lock_address())
                 .signer_lockscript(from_ckb_cell_data.signer_lockscript())
+                .x_extra(from_ckb_cell_data.x_extra())
                 .build()
                 .as_bytes();
             check_capacity(to_capacity, tockb_data.len())?;

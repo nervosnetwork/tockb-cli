@@ -141,6 +141,10 @@ impl<'a> ToCkbSubCommand<'a> {
                     .about("set price oracle and write the outpoint to config")
                     .arg(arg::privkey_path().required(true))
                     .arg(Arg::with_name("price").long("price").takes_value(true)),
+                App::new("dev-set-btc-difficulty-cell")
+                    .about("set btc difficulty cell and write the outpoint to config")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(Arg::with_name("difficulty").long("difficulty").takes_value(true)),
                 App::new("deploy")
                     .about("deploy toCKB scripts")
                     .arg(arg::privkey_path().required(true))
@@ -301,6 +305,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .send_transaction(tx.data())
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
         let mut settings = Settings::new(&config_path)
             .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
         settings.btc_difficulty_cell.outpoint = OutpointConf {
@@ -309,7 +314,7 @@ impl<'a> ToCkbSubCommand<'a> {
         };
         settings.write(&config_path)?;
         Ok(Output::new_output(format!(
-            "price oracle config written to {:?}",
+            "btc difficulty cell config written to {:?}",
             &config_path
         )))
     }
@@ -645,6 +650,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let MintXtArgs {
             privkey_path,
             tx_fee,
+            cell_path,
             cell,
             spv_proof,
         } = args;
@@ -1122,6 +1128,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     spv_proof: get_arg_value(m, "spv_proof")?
                         .parse()
                         .map_err(|_e| "parse spv_proof error".to_owned())?,
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
                     cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
@@ -1211,6 +1218,7 @@ pub struct MintXtArgs {
     pub privkey_path: String,
     pub tx_fee: String,
 
+    pub cell_path: String,
     pub cell: String,
     pub spv_proof: String,
 }

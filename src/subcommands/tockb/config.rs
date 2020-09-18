@@ -47,3 +47,24 @@ impl Settings {
         Ok(())
     }
 }
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct CKBCell {
+    pub outpoint: OutpointConf,
+}
+
+impl CKBCell {
+    pub fn new(config_path: &str) -> Result<Self, ConfigError> {
+        let mut s = Config::new();
+        s.merge(File::with_name(config_path))?;
+        s.merge(Environment::with_prefix("app"))?;
+        s.try_into()
+    }
+
+    pub fn write(&self, config_path: &str) -> Result<(), String> {
+        let s = toml::to_string(self).map_err(|e| format!("toml serde error: {}", e))?;
+        std::fs::write(config_path, &s)
+            .map_err(|e| format!("fail to write ckb cell. err: {}", e))?;
+        Ok(())
+    }
+}

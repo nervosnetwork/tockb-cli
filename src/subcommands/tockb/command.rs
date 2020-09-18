@@ -16,7 +16,7 @@ use int_enum::IntEnum;
 use molecule::prelude::Byte;
 use serde::{Deserialize, Serialize};
 use tockb_types::{
-    config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, XT_CELL_CAPACITY},
+    config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
     generated::{
         basic, btc_difficulty::BTCDifficulty, mint_xt_witness::MintXTWitness,
         tockb_cell_data::ToCKBCellData,
@@ -207,7 +207,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .build();
         let cell = get_live_cell(self.rpc_client, outpoint, true)?;
 
-        let mut buf = [0u8; 16];
+        let mut buf = [0u8; UDT_LEN];
         buf.copy_from_slice(cell.1.as_ref());
         let price = u128::from_le_bytes(buf);
         Ok((cell_dep, price))
@@ -285,7 +285,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .build();
         let mut helper = TxHelper::default();
 
-        // 17557993035167u64 use test
+        // 17345997805929 use test
         let dep_data = {
             let data = BTCDifficulty::new_builder()
                 .previous(difficulty.to_le_bytes().to_vec().into())
@@ -576,8 +576,9 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
-            + 2 * 200 * 100_000_000
-            + sudt_amount * 150 / (100 * price) * 100_000_000) as u64;
+            + 2 * 200 * CKB_UNITS as u128
+            + sudt_amount * 150 / (100 * price) * CKB_UNITS as u128)
+            as u64;
 
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(

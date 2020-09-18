@@ -177,7 +177,9 @@ impl<'a> ToCkbSubCommand<'a> {
                     .about("withdraw collateral")
                     .arg(arg::privkey_path().required_unless(arg::from_account().get_name()))
                     .arg(arg::tx_fee().required(true))
-                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
+                    .arg(Arg::from("-s --spv-proof=[spv-proof] 'spv-proof'")),
             ])
     }
 
@@ -476,7 +478,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
-        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script =
             Address::from_str(&signer_lockscript_addr)?.payload().into();
@@ -573,8 +574,13 @@ impl<'a> ToCkbSubCommand<'a> {
         let WithdrawCollateralArgs {
             privkey_path,
             tx_fee,
+            cell_path,
             cell,
+            spv_proof,
         } = args;
+
+        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+            .or(cell.ok_or("cell is none".to_string()))?;
 
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
@@ -615,6 +621,24 @@ impl<'a> ToCkbSubCommand<'a> {
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();
+
+        {
+            let spv_proof = hex::decode(clear_0x(spv_proof.as_str()))
+                .map_err(|err| format!("Send transaction error: {}", err))?;
+            let witness_data = MintXTWitness::new_builder()
+                .spv_proof(spv_proof.into())
+                .cell_dep_index_list(vec![0].into())
+                .build();
+            let witness = WitnessArgs::new_builder()
+                .input_type(Some(witness_data.as_bytes()).pack())
+                .build();
+
+            helper.transaction = helper
+                .transaction
+                .as_advanced_builder()
+                .set_witnesses(vec![witness.as_bytes().pack()])
+                .build();
+        }
 
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
@@ -906,9 +930,11 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;
                 let args = WithdrawCollateralArgs {
-                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
+                    spv_proof: get_arg_value(m, "spv-proof")?,
                 };
                 let tx = self.withdraw_collateral(args, true, settings)?;
                 if debug {
@@ -979,7 +1005,10 @@ pub struct WithdrawCollateralArgs {
     pub privkey_path: String,
     pub tx_fee: String,
 
-    pub cell: String,
+    pub cell_path: String,
+    pub cell: Option<String>,
+
+    pub spv_proof: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

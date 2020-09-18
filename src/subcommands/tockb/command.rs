@@ -18,10 +18,12 @@ use serde::{Deserialize, Serialize};
 use tockb_types::{
     config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
     generated::{
-        basic, btc_difficulty::BTCDifficulty, mint_xt_witness::MintXTWitness,
+        basic,
+        btc_difficulty::BTCDifficulty,
+        mint_xt_witness::{BTCSPVProof, MintXTWitness},
         tockb_cell_data::ToCKBCellData,
     },
-    ToCKBCellDataView, ToCKBStatus, XChainKind,
+    BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
 };
 
 use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -746,19 +748,32 @@ impl<'a> ToCkbSubCommand<'a> {
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
         let from_capacity: u64 = from_cell.capacity().unpack();
+        let spv_proof = hex::decode(clear_0x(spv_proof.as_str()))
+            .map_err(|err| format!("hex decode spv_proof error: {}", err))?;
 
         // gen output of tockb cell
         {
             let to_capacity = from_capacity - PLEDGE - XT_CELL_CAPACITY;
-            let tockb_data = ToCKBCellData::new_builder()
-                .status(Byte::new(ToCKBStatus::Warranty.int_value()))
-                .lot_size(from_ckb_cell_data.lot_size())
-                .user_lockscript(from_ckb_cell_data.user_lockscript())
-                .x_lock_address(from_ckb_cell_data.x_lock_address())
-                .signer_lockscript(from_ckb_cell_data.signer_lockscript())
-                .x_extra(from_ckb_cell_data.x_extra())
-                .build()
-                .as_bytes();
+
+            // get tx_id and funding_output_index from spv_proof
+            let btc_spv_proof = BTCSPVProof::from_slice(spv_proof.as_slice())
+                .map_err(|err| format!("btc_spv_proof invalid: {}", err))?;
+            let tx_id = btc_spv_proof.tx_id().raw_data();
+            let funding_output_index = {
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(btc_spv_proof.funding_output_index().raw_data().as_ref());
+                u32::from_le_bytes(buf)
+            };
+
+            let mut output_data_view = data_view.clone();
+            output_data_view.status = ToCKBStatus::Warranty;
+            output_data_view.x_extra = XExtraView::Btc(BtcExtraView {
+                lock_tx_hash: tx_id.into(),
+                lock_vout_index: funding_output_index,
+            });
+            let tockb_data = output_data_view
+                .as_molecule_data()
+                .expect("output_data_view.as_molecule_data error");
             check_capacity(to_capacity, tockb_data.len())?;
 
             let to_output = CellOutput::new_builder()
@@ -819,8 +834,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         // add witness
         {
-            let spv_proof = hex::decode(clear_0x(spv_proof.as_str()))
-                .map_err(|err| format!("Send transaction error: {}", err))?;
             let witness_data = MintXTWitness::new_builder()
                 .spv_proof(spv_proof.into())
                 .cell_dep_index_list(vec![0].into())

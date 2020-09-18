@@ -21,7 +21,7 @@ use tockb_types::{
     tockb_cell::{ToCKBCellDataView, XChainKind},
 };
 
-use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings};
+use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
 use crate::plugin::PluginManager;
 pub use crate::subcommands::wallet::start_index_thread;
 use crate::subcommands::{CliSubCommand, Output};
@@ -163,13 +163,15 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("--user-lockscript-addr=[user-lockscript-addr] 'user-lockscript-addr'"))
                     .arg(Arg::from("-p --pledge=[pledge] 'pledge'"))
                     .arg(Arg::from("-l --lot_size=[lot_size] 'lot_size'"))
-                    .arg(Arg::from("-k --kind=[kind] 'kind'")),
+                    .arg(Arg::from("-k --kind=[kind] 'kind'"))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml")),
                 App::new("bonding")
                     .about("bonding signer")
                     .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
-                    .arg(Arg::from("--lock_address=[lock_address] 'lock_address'"))
-                    .arg(Arg::from("--signer_lockscript_addr=[signer_lockscript_addr] 'signer_lockscript_addr'"))
+                    .arg(Arg::from("--lock-address=[lock-address] 'lock-address'"))
+                    .arg(Arg::from("--signer-lockscript-addr=[signer-lockscript-addr] 'signer-lockscript-addr'"))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
@@ -370,6 +372,7 @@ impl<'a> ToCkbSubCommand<'a> {
             pledge,
             kind,
             lot_size,
+            cell_path,
         } = args;
 
         let user_lockscript: Script = Address::from_str(&user_lockscript_addr)?.payload().into();
@@ -446,6 +449,8 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+
+        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -458,12 +463,15 @@ impl<'a> ToCkbSubCommand<'a> {
         let BondingArgs {
             privkey_path,
             tx_fee,
-
+            cell_path,
             cell,
             signer_lockscript_addr,
             lock_address,
         } = args;
 
+        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+            .or(cell.ok_or("cell is none".to_string()))?;
+        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script =
             Address::from_str(&signer_lockscript_addr)?.payload().into();
@@ -546,6 +554,8 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+
+        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -708,6 +718,21 @@ impl<'a> ToCkbSubCommand<'a> {
 
         get_live_cell(self.rpc_client, original_tx_outpoint, true)
     }
+
+    fn read_ckb_cell_config(cell_path: String) -> Result<String, String> {
+        let ckb_cell = CKBCell::new(&cell_path)
+            .map_err(|e| format!("failed to load ckb cell from {}, err: {}", &cell_path, e))?;
+        let cell = ckb_cell.outpoint.tx_hash + "." + &ckb_cell.outpoint.index.to_string();
+        Ok(cell.to_string())
+    }
+
+    fn write_ckb_cell_config(cell_path: String, tx_hash: String, index: u32) -> Result<(), String> {
+        let mut ckb_cell = CKBCell::default();
+        ckb_cell.outpoint = OutpointConf { tx_hash, index };
+        let s = toml::to_string(&ckb_cell).expect("toml serde error");
+        println!("ckb cell: \n\n{}", &s);
+        ckb_cell.write(&cell_path)
+    }
 }
 
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
@@ -772,6 +797,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
                     user_lockscript_addr: get_arg_value(m, "user-lockscript-addr")?,
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
                 };
                 let tx = self.deposit_request(args, false, settings)?;
                 if debug {
@@ -787,9 +813,10 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;
                 let args = BondingArgs {
-                    cell: get_arg_value(m, "cell").map(|s| s.to_string())?,
-                    lock_address: get_arg_value(m, "lock_address").map(|s| s.to_string())?,
-                    signer_lockscript_addr: get_arg_value(m, "signer_lockscript_addr")
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
+                    lock_address: get_arg_value(m, "lock-address").map(|s| s.to_string())?,
+                    signer_lockscript_addr: get_arg_value(m, "signer-lockscript-addr")
                         .map(|s| s.to_string())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
                     tx_fee: get_arg_value(m, "tx-fee")?,
@@ -842,6 +869,8 @@ pub struct DepositRequestArgs {
     pub pledge: u64,
     pub lot_size: u8,
     pub kind: u8,
+
+    pub cell_path: String,
 }
 
 #[derive(Clone, Debug)]
@@ -849,7 +878,8 @@ pub struct BondingArgs {
     pub privkey_path: String,
     pub tx_fee: String,
 
-    pub cell: String,
+    pub cell_path: String,
+    pub cell: Option<String>,
 
     pub lock_address: String,
     pub signer_lockscript_addr: String,

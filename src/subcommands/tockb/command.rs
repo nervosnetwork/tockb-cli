@@ -293,7 +293,6 @@ impl<'a> ToCkbSubCommand<'a> {
                 .previous(difficulty.to_le_bytes().to_vec().into())
                 .current(difficulty.to_le_bytes().to_vec().into())
                 .build();
-            dbg!(&data);
             data.as_bytes()
         };
 
@@ -553,7 +552,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
-        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script =
             Address::from_str(&signer_lockscript_addr)?.payload().into();
@@ -655,23 +653,14 @@ impl<'a> ToCkbSubCommand<'a> {
             cell,
             spv_proof,
         } = args;
-        dbg!("--------------begin create mint_xt tx--------------");
-        dbg!(privkey_path.clone());
-        dbg!(tx_fee.clone());
-        dbg!(cell_path.clone());
-        dbg!(spv_proof.clone());
-
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
 
-        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let mut helper = TxHelper::default();
         if tx_fee > ONE_CKB {
             return Err("Transaction fee can not be more than 1.0 CKB".to_string());
         }
-
-        dbg!(tx_fee);
 
         // add cellDeps
         {
@@ -728,7 +717,6 @@ impl<'a> ToCkbSubCommand<'a> {
                 .cell_dep(lockscript_cell_dep)
                 .cell_dep(sudt_typescript_dep)
                 .build();
-            dbg!("added all cellDeps: btc_difficulty_dep, typescript_cell_dep, lockscript_cell_dep, sudt_typescript_dep");
         };
 
         // get input tockb cell and basic info
@@ -759,11 +747,7 @@ impl<'a> ToCkbSubCommand<'a> {
             let btc_spv_proof = BTCSPVProof::from_slice(spv_proof.as_slice())
                 .map_err(|err| format!("btc_spv_proof invalid: {}", err))?;
             let tx_id = btc_spv_proof.tx_id().raw_data();
-            let funding_output_index = {
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(btc_spv_proof.funding_output_index().raw_data().as_ref());
-                u32::from_le_bytes(buf)
-            };
+            let funding_output_index: u32 = btc_spv_proof.funding_output_index().into();
 
             let mut output_data_view = data_view.clone();
             output_data_view.status = ToCKBStatus::Warranty;
@@ -782,7 +766,6 @@ impl<'a> ToCkbSubCommand<'a> {
                 .lock(tockb_lockscript.clone())
                 .build();
             helper.add_output(to_output, tockb_data);
-            dbg!("tockb cell generated", to_capacity);
         }
 
         // 2 xt cells
@@ -812,7 +795,7 @@ impl<'a> ToCkbSubCommand<'a> {
                 (lot_amount - signer_fee, signer_fee)
             };
 
-            let to_user_amount_data = Bytes::copy_from_slice(&to_user.to_le_bytes()[..]);
+            let to_user_amount_data: Bytes = to_user.to_le_bytes().to_vec().into();
             helper.add_output(sudt_user_output, to_user_amount_data);
 
             // xt cell of signer fee
@@ -827,9 +810,8 @@ impl<'a> ToCkbSubCommand<'a> {
                 .lock(signer_lockscript)
                 .build();
 
-            let to_signer_amount_data = Bytes::copy_from_slice(&to_signer.to_le_bytes()[..]);
+            let to_signer_amount_data = to_signer.to_le_bytes().to_vec().into();
             helper.add_output(sudt_signer_output, to_signer_amount_data);
-            dbg!("xt cells generated", to_user, to_signer);
         }
 
         // add witness
@@ -847,7 +829,6 @@ impl<'a> ToCkbSubCommand<'a> {
                 .as_advanced_builder()
                 .set_witnesses(vec![witness.as_bytes().pack()])
                 .build();
-            dbg!("finish add witness", hex::encode(witness.as_bytes()));
         }
 
         // add signature to pay tx fee

@@ -19,11 +19,11 @@ use tockb_types::{
     config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
     generated::{
         basic,
-        btc_difficulty::{BTCDifficulty, BTCDifficultyReader},
+        btc_difficulty::BTCDifficulty,
         mint_xt_witness::{BTCSPVProof, MintXTWitness},
         tockb_cell_data::ToCKBCellData,
     },
-    tockb_cell, BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
+    BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
 };
 
 use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -189,6 +189,14 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("--spv-proof=[spv-proof] 'spv-proof'").required(true))
                     .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
+                App::new("pre-term_redeem")
+                    .about("user redeem X in advance")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
+                    .arg(Arg::from("--unlock-address"))
+                    .arg(Arg::from("--redeemer--lockscript-addr")),
             ])
     }
 
@@ -574,41 +582,18 @@ impl<'a> ToCkbSubCommand<'a> {
         let sudt_amount: u128 = data_view
             .get_lot_xt_amount()
             .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
-        let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
+        let (_price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
             + 2 * 200 * CKB_UNITS as u128
             + sudt_amount * 150 / (100 * price) * CKB_UNITS as u128)
             as u64;
 
-        let lockscript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
-                    .unwrap(),
-            )
-            .index(settings.lockscript.outpoint.index.pack())
-            .build();
-        let typescript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(&hex::decode(settings.typescript.outpoint.tx_hash).unwrap())
-                    .unwrap(),
-            )
-            .index(settings.typescript.outpoint.index.pack())
-            .build();
-        let typescript_cell_dep = CellDep::new_builder()
-            .out_point(typescript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        let lockscript_cell_dep = CellDep::new_builder()
-            .out_point(lockscript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        helper.transaction = helper
-            .transaction
-            .as_advanced_builder()
-            .cell_dep(price_oracle_dep)
-            .cell_dep(typescript_cell_dep)
-            .cell_dep(lockscript_cell_dep)
-            .build();
+        let outpoints = vec![
+            settings.price_oracle.outpoint,
+            settings.typescript.outpoint,
+            settings.lockscript.outpoint,
+        ];
+        self.add_cell_deps(&mut helper, outpoints)?;
 
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref())
             .expect("should parse ToCKBCellData correct");
@@ -663,61 +648,13 @@ impl<'a> ToCkbSubCommand<'a> {
         }
 
         // add cellDeps
-        {
-            let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
-            let lockscript_out_point = OutPoint::new_builder()
-                .tx_hash(
-                    Byte32::from_slice(
-                        &hex::decode(settings.lockscript.outpoint.tx_hash)
-                            .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
-                    )
-                    .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
-                )
-                .index(settings.lockscript.outpoint.index.pack())
-                .build();
-            let typescript_out_point = OutPoint::new_builder()
-                .tx_hash(
-                    Byte32::from_slice(
-                        &hex::decode(settings.typescript.outpoint.tx_hash)
-                            .map_err(|e| format!("invalid typescript config. err: {}", e))?,
-                    )
-                    .map_err(|e| format!("invalid typescript config. err: {}", e))?,
-                )
-                .index(settings.typescript.outpoint.index.pack())
-                .build();
-            let sudt_out_point = OutPoint::new_builder()
-                .tx_hash(
-                    Byte32::from_slice(
-                        &hex::decode(settings.sudt_script.outpoint.tx_hash)
-                            .map_err(|e| format!("invalid sudt_script config. err: {}", e))?,
-                    )
-                    .map_err(|e| format!("invalid sudt_script config. err: {}", e))?,
-                )
-                .index(settings.sudt_script.outpoint.index.pack())
-                .build();
-
-            let typescript_cell_dep = CellDep::new_builder()
-                .out_point(typescript_out_point)
-                .dep_type(DepType::Code.into())
-                .build();
-            let lockscript_cell_dep = CellDep::new_builder()
-                .out_point(lockscript_out_point)
-                .dep_type(DepType::Code.into())
-                .build();
-            let sudt_typescript_dep = CellDep::new_builder()
-                .out_point(sudt_out_point)
-                .dep_type(DepType::Code.into())
-                .build();
-
-            helper.transaction = helper
-                .transaction
-                .as_advanced_builder()
-                .cell_dep(btc_difficulty_dep)
-                .cell_dep(typescript_cell_dep)
-                .cell_dep(lockscript_cell_dep)
-                .cell_dep(sudt_typescript_dep)
-                .build();
-        };
+        let outpoints = vec![
+            settings.btc_difficulty_cell.outpoint,
+            settings.lockscript.outpoint,
+            settings.typescript.outpoint,
+            settings.sudt_script.outpoint,
+        ];
+        self.add_cell_deps(&mut helper, outpoints)?;
 
         // get input tockb cell and basic info
         let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
@@ -829,6 +766,143 @@ impl<'a> ToCkbSubCommand<'a> {
                 .as_advanced_builder()
                 .set_witnesses(vec![witness.as_bytes().pack()])
                 .build();
+        }
+
+        // add signature to pay tx fee
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+
+        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
+        Ok(tx)
+    }
+
+    pub fn pre_term_redeem(
+        &mut self,
+        args: PreTermRedeemArgs,
+        skip_check: bool,
+        settings: Settings,
+    ) -> Result<TransactionView, String> {
+        let PreTermRedeemArgs {
+            privkey_path,
+            tx_fee,
+            cell_path,
+            cell,
+
+            x_unlock_address,
+            redeemer_lockscript_addr,
+        } = args;
+
+        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+            .or(cell.ok_or("cell is none".to_string()))?;
+        let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
+        let mut helper = TxHelper::default();
+        if tx_fee > ONE_CKB {
+            return Err("Transaction fee can not be more than 1.0 CKB".to_string());
+        }
+
+        // add cellDeps
+        {
+            let outpoints = vec![
+                settings.lockscript.outpoint,
+                settings.typescript.outpoint,
+                settings.sudt_script.outpoint,
+            ];
+            self.add_cell_deps(&mut helper, outpoints)?;
+        }
+
+        // get input tockb cell and basic info
+        let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
+            Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
+            None => return Err("typescript of tockb cell is none".to_owned()),
+        };
+        let tockb_lockscript = from_cell.lock();
+        let data_view =
+            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
+                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+        let lot_amount = data_view
+            .get_lot_xt_amount()
+            .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
+        let from_capacity: u64 = from_cell.capacity().unpack();
+
+        let sudt_typescript_code_hash = hex::decode(settings.sudt_script.code_hash)
+            .expect("wrong sudt_script code hash config");
+        let sudt_typescript = Script::new_builder()
+            .code_hash(Byte32::from_slice(&sudt_typescript_code_hash).unwrap())
+            .hash_type(DepType::Code.into())
+            .args(tockb_lockscript.calc_script_hash().as_bytes().pack())
+            .build();
+        let redeemer_lockscript: Script = Address::from_str(&redeemer_lockscript_addr)?
+            .payload()
+            .into();
+
+        let (redeemer_is_depositor, user_lockscript) = {
+            let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+            let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+            let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+            let redeemer_lockscript = Script::from(&from_address_payload);
+            (
+                data_view.user_lockscript == redeemer_lockscript.as_bytes(),
+                data_view.user_lockscript.clone(),
+            )
+        };
+
+        // collect xt cell inputs to burn lot_amount xt
+        let signer_fee = lot_amount * SIGNER_FEE_RATE.0 / SIGNER_FEE_RATE.1;
+        let mut need_sudt_amount = lot_amount;
+        if !redeemer_is_depositor {
+            need_sudt_amount += signer_fee;
+        }
+
+        self.supply_sudt_amount(
+            &mut helper,
+            need_sudt_amount,
+            sudt_typescript.clone(),
+            privkey_path.clone(),
+            skip_check,
+        )?;
+
+        if !redeemer_is_depositor {
+            let to_depositor_xt_cell = CellOutput::new_builder()
+                .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
+                .type_(Some(sudt_typescript).pack())
+                .lock(
+                    Script::from_slice(user_lockscript.as_ref())
+                        .expect("user_lockscript decode from input_data error"),
+                )
+                .build();
+
+            let data = signer_fee.to_le_bytes().to_vec().into();
+            helper.add_output(to_depositor_xt_cell, data)
+        }
+
+        // gen output of tockb cell
+        {
+            let to_capacity = from_capacity;
+            let mut output_data_view = data_view.clone();
+            output_data_view.status = ToCKBStatus::Redeeming;
+            output_data_view.x_unlock_address = clear_0x(x_unlock_address.as_str())
+                .as_bytes()
+                .to_vec()
+                .into();
+            output_data_view.redeemer_lockscript = redeemer_lockscript.as_bytes();
+
+            let tockb_data = output_data_view
+                .as_molecule_data()
+                .expect("output_data_view.as_molecule_data error");
+            check_capacity(to_capacity, tockb_data.len())?;
+
+            let to_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(to_capacity).pack())
+                .type_(Some(tockb_typescript).pack())
+                .lock(tockb_lockscript.clone())
+                .build();
+            helper.add_output(to_output, tockb_data);
         }
 
         // add signature to pay tx fee
@@ -1018,6 +1092,138 @@ impl<'a> ToCkbSubCommand<'a> {
         println!("ckb cell: \n\n{}", &s);
         ckb_cell.write(&cell_path)
     }
+
+    fn add_cell_deps(
+        &mut self,
+        helper: &mut TxHelper,
+        outpoints: Vec<OutpointConf>,
+    ) -> Result<(), String> {
+        let mut builder = helper.transaction.as_advanced_builder();
+        for conf in outpoints {
+            let outpoint = OutPoint::new_builder()
+                .tx_hash(
+                    Byte32::from_slice(
+                        &hex::decode(conf.tx_hash)
+                            .map_err(|e| format!("invalid OutpointConf config. err: {}", e))?,
+                    )
+                    .map_err(|e| format!("invalid OutpointConf config. err: {}", e))?,
+                )
+                .index(conf.index.pack())
+                .build();
+            builder = builder.cell_dep(
+                CellDep::new_builder()
+                    .out_point(outpoint)
+                    .dep_type(DepType::Code.into())
+                    .build(),
+            );
+        }
+        helper.transaction = builder.build();
+        Ok(())
+    }
+
+    fn supply_sudt_amount(
+        &mut self,
+        helper: &mut TxHelper,
+        need_sudt_amount: u128,
+        sudt_typescript: Script,
+        privkey_path: String,
+        skip_check: bool,
+    ) -> Result<(), String> {
+        // basic info
+        let sudt_typescript_hash = sudt_typescript.calc_script_hash().unpack();
+        let index_dir = self.index_dir.clone();
+        let network_type = get_network_type(self.rpc_client)?;
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+        let lock_hash = Script::from(&from_address_payload).calc_script_hash();
+        let from_address = Address::new(network_type, from_address_payload.clone());
+        let genesis_info = self.genesis_info()?;
+        let genesis_hash = genesis_info.header().hash();
+        let genesis_info_clone = genesis_info.clone();
+        let max_mature_number = get_max_mature_number(self.rpc_client)?;
+        self.with_db(|_| ())?;
+
+        // collect live cellInfos to infos
+        let mut infos: Vec<LiveCellInfo> = Default::default();
+        let mut collected_amount: u128 = 0;
+        let mut terminator = |_, info: &LiveCellInfo| {
+            if collected_amount >= need_sudt_amount {
+                (true, false)
+            } else if info.type_hashes.is_some()
+                && info.type_hashes.as_ref().unwrap().1 == sudt_typescript_hash
+                && info.data_bytes == UDT_LEN as u64
+                && is_mature(info, max_mature_number)
+            {
+                collected_amount += {
+                    let (_, data) = get_live_cell(self.rpc_client, info.out_point(), true)
+                        .unwrap_or((CellOutput::default(), Bytes::default()));
+                    let mut buf = [0u8; UDT_LEN];
+                    buf.copy_from_slice(data.as_ref());
+                    u128::from_le_bytes(buf)
+                };
+                infos.push(info.clone());
+                (collected_amount >= need_sudt_amount, false)
+            } else {
+                (false, false)
+            }
+        };
+
+        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
+            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
+                .map(|db| {
+                    db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
+                })
+                .map_err(Into::into)
+        }) {
+            return Err(format!(
+                "Index database may not ready, sync process: {}, error: {}",
+                self.index_controller.state().read().to_string(),
+                err.to_string(),
+            ));
+        }
+
+        if collected_amount < need_sudt_amount {
+            return Err(format!(
+                "sudt amount(mature) not enough: {} => {}",
+                from_address, need_sudt_amount,
+            ));
+        }
+
+        // add inputs from infos
+        let mut live_cell_cache: HashMap<(OutPoint, bool), (CellOutput, Bytes)> =
+            Default::default();
+        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+            get_live_cell_with_cache(&mut live_cell_cache, self.rpc_client, out_point, with_data)
+                .map(|(output, _)| output)
+        };
+
+        for info in &infos {
+            helper.add_input(
+                info.out_point(),
+                None,
+                &mut get_live_cell_fn,
+                &genesis_info,
+                skip_check,
+            )?;
+        }
+
+        // add sudt change and return the capacity from the sudt inputs
+        if collected_amount > need_sudt_amount {
+            let sudt_change_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
+                .lock((&from_address_payload).into())
+                .type_(Some(sudt_typescript).pack())
+                .build();
+            let sudt_change_data = (collected_amount - need_sudt_amount)
+                .to_le_bytes()
+                .to_vec()
+                .into();
+            helper.add_output(sudt_change_output, sudt_change_data);
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
@@ -1148,6 +1354,28 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     Ok(Output::new_output(tx_hash))
                 }
             }
+            ("pre-term_redeem", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
+                let args = PreTermRedeemArgs {
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
+                    privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                    x_unlock_address: get_arg_value(m, "unlock-address").map(|s| s.to_string())?,
+                    redeemer_lockscript_addr: get_arg_value(m, "redeemer-lockscript-addr")
+                        .map(|s| s.to_string())?,
+                };
+                let tx = self.pre_term_redeem(args, true, settings)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
             _ => Err(Self::subcommand().generate_usage()),
         }
     }
@@ -1230,6 +1458,18 @@ pub struct MintXtArgs {
     pub spv_proof: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreTermRedeemArgs {
+    pub privkey_path: String,
+    pub tx_fee: String,
+
+    pub cell_path: String,
+    pub cell: Option<String>,
+
+    pub x_unlock_address: String,
+    pub redeemer_lockscript_addr: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LiveCells {
     pub live_cells: Vec<LiveCell>,
@@ -1242,3 +1482,6 @@ pub struct LiveCell {
     pub info: LiveCellInfo,
     pub mature: bool,
 }
+
+#[test]
+fn test_cmd() {}

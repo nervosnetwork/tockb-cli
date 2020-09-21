@@ -7,7 +7,7 @@ use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockView, Capacity, DepType, TransactionView},
-    packed::{Byte32, CellDep, CellOutput, OutPoint, Script},
+    packed::{Byte32, CellDep, CellOutput, OutPoint, Script, WitnessArgs},
     prelude::*,
     H256,
 };
@@ -17,6 +17,7 @@ use molecule::prelude::Byte;
 use serde::{Deserialize, Serialize};
 use tockb_types::{
     generated::{basic, tockb_cell_data::ToCKBCellData},
+    mint_xt_witness::MintXTWitness,
     tockb_cell,
     tockb_cell::{ToCKBCellDataView, XChainKind},
 };

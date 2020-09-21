@@ -6,3 +6,6 @@ test/Cargo.lock
 privkeys/
 .tockb-cli/
 .tockb-config.toml
+.ckb_cell.toml
+**.idea
+**.DS_Store

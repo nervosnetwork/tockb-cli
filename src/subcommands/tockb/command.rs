@@ -189,14 +189,14 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("--spv-proof=[spv-proof] 'spv-proof'").required(true))
                     .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
-                App::new("pre-term_redeem")
+                App::new("pre_term_redeem")
                     .about("user redeem X in advance")
                     .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--unlock-address=[unlock-address] 'unlock-address'").required(true))
+                    .arg(Arg::from("--redeemer-lockscript-addr=[redeemer-lockscript-addr] 'redeemer-lockscript-addr'").required(true))
                     .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
-                    .arg(Arg::from("-c --cell=[cell] 'cell'"))
-                    .arg(Arg::from("--unlock-address"))
-                    .arg(Arg::from("--redeemer--lockscript-addr")),
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
 
@@ -852,35 +852,6 @@ impl<'a> ToCkbSubCommand<'a> {
             )
         };
 
-        // collect xt cell inputs to burn lot_amount xt
-        let signer_fee = lot_amount * SIGNER_FEE_RATE.0 / SIGNER_FEE_RATE.1;
-        let mut need_sudt_amount = lot_amount;
-        if !redeemer_is_depositor {
-            need_sudt_amount += signer_fee;
-        }
-
-        self.supply_sudt_amount(
-            &mut helper,
-            need_sudt_amount,
-            sudt_typescript.clone(),
-            privkey_path.clone(),
-            skip_check,
-        )?;
-
-        if !redeemer_is_depositor {
-            let to_depositor_xt_cell = CellOutput::new_builder()
-                .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
-                .type_(Some(sudt_typescript).pack())
-                .lock(
-                    Script::from_slice(user_lockscript.as_ref())
-                        .expect("user_lockscript decode from input_data error"),
-                )
-                .build();
-
-            let data = signer_fee.to_le_bytes().to_vec().into();
-            helper.add_output(to_depositor_xt_cell, data)
-        }
-
         // gen output of tockb cell
         {
             let to_capacity = from_capacity;
@@ -903,6 +874,37 @@ impl<'a> ToCkbSubCommand<'a> {
                 .lock(tockb_lockscript.clone())
                 .build();
             helper.add_output(to_output, tockb_data);
+        }
+
+        // collect xt cell inputs to burn lot_amount xt
+        {
+            let signer_fee = lot_amount * SIGNER_FEE_RATE.0 / SIGNER_FEE_RATE.1;
+            let mut need_sudt_amount = lot_amount;
+            if !redeemer_is_depositor {
+                need_sudt_amount += signer_fee;
+            }
+
+            self.supply_sudt_amount(
+                &mut helper,
+                need_sudt_amount,
+                sudt_typescript.clone(),
+                privkey_path.clone(),
+                skip_check,
+            )?;
+
+            if !redeemer_is_depositor {
+                let to_depositor_xt_cell = CellOutput::new_builder()
+                    .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
+                    .type_(Some(sudt_typescript).pack())
+                    .lock(
+                        Script::from_slice(user_lockscript.as_ref())
+                            .expect("user_lockscript decode from input_data error"),
+                    )
+                    .build();
+
+                let data = signer_fee.to_le_bytes().to_vec().into();
+                helper.add_output(to_depositor_xt_cell, data)
+            }
         }
 
         // add signature to pay tx fee
@@ -1354,7 +1356,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     Ok(Output::new_output(tx_hash))
                 }
             }
-            ("pre-term_redeem", Some(m)) => {
+            ("pre_term_redeem", Some(m)) => {
                 let settings = Settings::new(&config_path).map_err(|e| {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;

@@ -866,7 +866,7 @@ impl<'a> ToCkbSubCommand<'a> {
         } = args;
 
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
-        .or(cell.ok_or("cell is none".to_string()))?;
+            .or(cell.ok_or("cell is none".to_string()))?;
 
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
@@ -927,9 +927,9 @@ impl<'a> ToCkbSubCommand<'a> {
         }
 
         let to_output = CellOutput::new_builder()
-        .capacity(Capacity::shannons(to_capacity).pack())
-        .lock((&from_address_payload).into())
-        .build();
+            .capacity(Capacity::shannons(to_capacity).pack())
+            .lock((&from_address_payload).into())
+            .build();
         helper.add_output(to_output, Bytes::new());
 
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
@@ -1238,6 +1238,14 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     spv_proof: get_arg_value(m, "spv-proof")?,
                 };
                 let tx = self.withdraw_collateral(args, true, settings)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
             ("mint_xt", Some(m)) => {
                 let settings = Settings::new(&config_path).map_err(|e| {
                     format!("failed to load config from {}, err: {}", &config_path, e)

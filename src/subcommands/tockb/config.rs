@@ -25,11 +25,17 @@ pub struct PriceOracle {
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
+pub struct BtcDifficulty {
+    pub outpoint: OutpointConf,
+}
+
+#[derive(Deserialize, Serialize, Default, Debug, Clone)]
 pub struct Settings {
     pub lockscript: ScriptConf,
     pub typescript: ScriptConf,
     pub sudt_script: ScriptConf,
     pub price_oracle: PriceOracle,
+    pub btc_difficulty_cell: BtcDifficulty,
 }
 
 impl Settings {

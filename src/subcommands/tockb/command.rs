@@ -7,7 +7,7 @@ use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockView, Capacity, DepType, TransactionView},
-    packed::{Byte32, CellDep, CellOutput, OutPoint, Script},
+    packed::{Byte32, CellDep, CellOutput, OutPoint, Script, WitnessArgs},
     prelude::*,
     H256,
 };
@@ -16,9 +16,14 @@ use int_enum::IntEnum;
 use molecule::prelude::Byte;
 use serde::{Deserialize, Serialize};
 use tockb_types::{
-    generated::{basic, tockb_cell_data::ToCKBCellData},
-    tockb_cell,
-    tockb_cell::{ToCKBCellDataView, XChainKind},
+    config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
+    generated::{
+        basic,
+        btc_difficulty::BTCDifficulty,
+        mint_xt_witness::{BTCSPVProof, MintXTWitness},
+        tockb_cell_data::ToCKBCellData,
+    },
+    BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
 };
 
 use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
@@ -136,6 +141,10 @@ impl<'a> ToCkbSubCommand<'a> {
                     .about("set price oracle and write the outpoint to config")
                     .arg(arg::privkey_path().required(true))
                     .arg(Arg::with_name("price").long("price").takes_value(true)),
+                App::new("dev-set-btc-difficulty-cell")
+                    .about("set btc difficulty cell and write the outpoint to config")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(Arg::with_name("difficulty").long("difficulty").takes_value(true)),
                 App::new("deploy")
                     .about("deploy toCKB scripts")
                     .arg(arg::privkey_path().required(true))
@@ -173,6 +182,13 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("--signer-lockscript-addr=[signer-lockscript-addr] 'signer-lockscript-addr'"))
                     .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
+                App::new("mint_xt")
+                    .about("use a bonded toCKB cell and xchain's spv-proof to mint xt cell")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--spv-proof=[spv-proof] 'spv-proof'").required(true))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
             ])
     }
 
@@ -193,10 +209,28 @@ impl<'a> ToCkbSubCommand<'a> {
             .build();
         let cell = get_live_cell(self.rpc_client, outpoint, true)?;
 
-        let mut buf = [0u8; 16];
+        let mut buf = [0u8; UDT_LEN];
         buf.copy_from_slice(cell.1.as_ref());
         let price = u128::from_le_bytes(buf);
         Ok((cell_dep, price))
+    }
+
+    pub fn get_btc_difficulty_dep(&mut self, settings: &Settings) -> Result<CellDep, String> {
+        let outpoint = OutPoint::new_builder()
+            .tx_hash(
+                Byte32::from_slice(
+                    &hex::decode(&settings.btc_difficulty_cell.outpoint.tx_hash)
+                        .map_err(|e| format!("invalid btc_difficulty_cell config. err: {}", e))?,
+                )
+                .map_err(|e| format!("invalid btc_difficulty_cell config. err: {}", e))?,
+            )
+            .index(settings.btc_difficulty_cell.outpoint.index.pack())
+            .build();
+        let cell_dep = CellDep::new_builder()
+            .out_point(outpoint.clone())
+            .dep_type(DepType::Code.into())
+            .build();
+        Ok(cell_dep)
     }
 
     pub fn set_price_oracle(&mut self, args: SetPriceOracleArgs) -> Result<Output, String> {
@@ -232,6 +266,54 @@ impl<'a> ToCkbSubCommand<'a> {
         settings.write(&config_path)?;
         Ok(Output::new_output(format!(
             "price oracle config written to {:?}",
+            &config_path
+        )))
+    }
+
+    pub fn set_btc_difficulty_cell(&mut self, args: SetBtcDifficultArgs) -> Result<Output, String> {
+        let SetBtcDifficultArgs {
+            difficulty,
+            config_path,
+            privkey_path,
+            skip_check,
+        } = args;
+
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+
+        let output = CellOutput::new_builder()
+            .lock((&from_address_payload).into())
+            .build();
+        let mut helper = TxHelper::default();
+
+        // 17345997805929 use test
+        let dep_data = {
+            let data = BTCDifficulty::new_builder()
+                .previous(difficulty.to_le_bytes().to_vec().into())
+                .current(difficulty.to_le_bytes().to_vec().into())
+                .build();
+            data.as_bytes()
+        };
+
+        helper.add_output_with_auto_capacity(output, dep_data);
+        let tx_fee: u64 = CapacityParser.parse("0.0001")?.into();
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+        let mut settings = Settings::new(&config_path)
+            .map_err(|e| format!("failed to load config from {}, err: {}", &config_path, e))?;
+        settings.btc_difficulty_cell.outpoint = OutpointConf {
+            tx_hash: tx_hash.to_string(),
+            index: 0,
+        };
+        settings.write(&config_path)?;
+        Ok(Output::new_output(format!(
+            "btc difficulty cell config written to {:?}",
             &config_path
         )))
     }
@@ -368,7 +450,6 @@ impl<'a> ToCkbSubCommand<'a> {
             privkey_path,
             tx_fee,
             user_lockscript_addr,
-
             pledge,
             kind,
             lot_size,
@@ -377,7 +458,7 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let user_lockscript: Script = Address::from_str(&user_lockscript_addr)?.payload().into();
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
-        let to_capacity = pledge * 100_000_000;
+        let to_capacity = pledge * CKB_UNITS;
         let mut helper = TxHelper::default();
 
         let lockscript_out_point = OutPoint::new_builder()
@@ -415,7 +496,7 @@ impl<'a> ToCkbSubCommand<'a> {
             .cell_dep(lockscript_cell_dep)
             .build();
         let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Initial.int_value()))
+            .status(Byte::new(ToCKBStatus::Initial.int_value()))
             .lot_size(Byte::new(lot_size))
             .user_lockscript(basic::Script::from_slice(user_lockscript.as_slice()).unwrap())
             .build()
@@ -471,7 +552,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
-        dbg!(cell.clone());
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script =
             Address::from_str(&signer_lockscript_addr)?.payload().into();
@@ -496,8 +576,9 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
         let (price_oracle_dep, price) = self.get_price_oracle(&settings)?;
         let to_capacity = (input_capacity as u128
-            + 2 * 200 * 100_000_000
-            + sudt_amount * 150 / (100 * price) * 100_000_000) as u64;
+            + 2 * 200 * CKB_UNITS as u128
+            + sudt_amount * 150 / (100 * price) * CKB_UNITS as u128)
+            as u64;
 
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
@@ -532,7 +613,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref())
             .expect("should parse ToCKBCellData correct");
         let tockb_data = ToCKBCellData::new_builder()
-            .status(Byte::new(tockb_cell::ToCKBStatus::Bonded.int_value()))
+            .status(Byte::new(ToCKBStatus::Bonded.int_value()))
             .lot_size(from_ckb_cell_data.lot_size())
             .user_lockscript(from_ckb_cell_data.user_lockscript())
             .x_lock_address(lock_address.as_bytes().to_vec().into())
@@ -547,6 +628,210 @@ impl<'a> ToCkbSubCommand<'a> {
             .lock(lock_script)
             .build();
         helper.add_output(to_output, tockb_data.clone());
+        let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
+        let tx_hash = self
+            .rpc_client
+            .send_transaction(tx.data())
+            .map_err(|err| format!("Send transaction error: {}", err))?;
+        assert_eq!(tx.hash(), tx_hash.pack());
+        self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
+
+        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
+        Ok(tx)
+    }
+
+    pub fn mint_xt(
+        &mut self,
+        args: MintXtArgs,
+        skip_check: bool,
+        settings: Settings,
+    ) -> Result<TransactionView, String> {
+        let MintXtArgs {
+            privkey_path,
+            tx_fee,
+            cell_path,
+            cell,
+            spv_proof,
+        } = args;
+        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+            .or(cell.ok_or("cell is none".to_string()))?;
+
+        let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
+        let mut helper = TxHelper::default();
+        if tx_fee > ONE_CKB {
+            return Err("Transaction fee can not be more than 1.0 CKB".to_string());
+        }
+
+        // add cellDeps
+        {
+            let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
+            let lockscript_out_point = OutPoint::new_builder()
+                .tx_hash(
+                    Byte32::from_slice(
+                        &hex::decode(settings.lockscript.outpoint.tx_hash)
+                            .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
+                    )
+                    .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
+                )
+                .index(settings.lockscript.outpoint.index.pack())
+                .build();
+            let typescript_out_point = OutPoint::new_builder()
+                .tx_hash(
+                    Byte32::from_slice(
+                        &hex::decode(settings.typescript.outpoint.tx_hash)
+                            .map_err(|e| format!("invalid typescript config. err: {}", e))?,
+                    )
+                    .map_err(|e| format!("invalid typescript config. err: {}", e))?,
+                )
+                .index(settings.typescript.outpoint.index.pack())
+                .build();
+            let sudt_out_point = OutPoint::new_builder()
+                .tx_hash(
+                    Byte32::from_slice(
+                        &hex::decode(settings.sudt_script.outpoint.tx_hash)
+                            .map_err(|e| format!("invalid sudt_script config. err: {}", e))?,
+                    )
+                    .map_err(|e| format!("invalid sudt_script config. err: {}", e))?,
+                )
+                .index(settings.sudt_script.outpoint.index.pack())
+                .build();
+
+            let typescript_cell_dep = CellDep::new_builder()
+                .out_point(typescript_out_point)
+                .dep_type(DepType::Code.into())
+                .build();
+            let lockscript_cell_dep = CellDep::new_builder()
+                .out_point(lockscript_out_point)
+                .dep_type(DepType::Code.into())
+                .build();
+            let sudt_typescript_dep = CellDep::new_builder()
+                .out_point(sudt_out_point)
+                .dep_type(DepType::Code.into())
+                .build();
+
+            helper.transaction = helper
+                .transaction
+                .as_advanced_builder()
+                .cell_dep(btc_difficulty_dep)
+                .cell_dep(typescript_cell_dep)
+                .cell_dep(lockscript_cell_dep)
+                .cell_dep(sudt_typescript_dep)
+                .build();
+        };
+
+        // get input tockb cell and basic info
+        let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
+
+        let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
+            Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
+            None => return Err("typescript of tockb cell is none".to_owned()),
+        };
+        let tockb_lockscript = from_cell.lock();
+
+        let data_view =
+            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
+                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+        let lot_amount = data_view
+            .get_lot_xt_amount()
+            .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
+        let from_capacity: u64 = from_cell.capacity().unpack();
+        let spv_proof = hex::decode(clear_0x(spv_proof.as_str()))
+            .map_err(|err| format!("hex decode spv_proof error: {}", err))?;
+
+        // gen output of tockb cell
+        {
+            let to_capacity = from_capacity - PLEDGE - XT_CELL_CAPACITY;
+
+            // get tx_id and funding_output_index from spv_proof
+            let btc_spv_proof = BTCSPVProof::from_slice(spv_proof.as_slice())
+                .map_err(|err| format!("btc_spv_proof invalid: {}", err))?;
+            let tx_id = btc_spv_proof.tx_id().raw_data();
+            let funding_output_index: u32 = btc_spv_proof.funding_output_index().into();
+
+            let mut output_data_view = data_view.clone();
+            output_data_view.status = ToCKBStatus::Warranty;
+            output_data_view.x_extra = XExtraView::Btc(BtcExtraView {
+                lock_tx_hash: tx_id.into(),
+                lock_vout_index: funding_output_index,
+            });
+            let tockb_data = output_data_view
+                .as_molecule_data()
+                .expect("output_data_view.as_molecule_data error");
+            check_capacity(to_capacity, tockb_data.len())?;
+
+            let to_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(to_capacity).pack())
+                .type_(Some(tockb_typescript).pack())
+                .lock(tockb_lockscript.clone())
+                .build();
+            helper.add_output(to_output, tockb_data);
+        }
+
+        // 2 xt cells
+        {
+            // mint xt cell to user, amount = lot_size * (1 - signer fee rate)
+            let user_lockscript = Script::from_slice(
+                from_ckb_cell_data.user_lockscript().as_slice(),
+            )
+            .map_err(|e| format!("parse user_lockscript from tockb_cell_data error: {}", e))?;
+
+            let sudt_typescript_code_hash = hex::decode(settings.sudt_script.code_hash)
+                .expect("wrong sudt_script code hash config");
+            let sudt_typescript = Script::new_builder()
+                .code_hash(Byte32::from_slice(&sudt_typescript_code_hash).unwrap())
+                .hash_type(DepType::Code.into())
+                .args(tockb_lockscript.calc_script_hash().as_bytes().pack())
+                .build();
+
+            let sudt_user_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(PLEDGE).pack())
+                .type_(Some(sudt_typescript.clone()).pack())
+                .lock(user_lockscript)
+                .build();
+
+            let (to_user, to_signer) = {
+                let signer_fee = lot_amount * SIGNER_FEE_RATE.0 / SIGNER_FEE_RATE.1;
+                (lot_amount - signer_fee, signer_fee)
+            };
+
+            let to_user_amount_data: Bytes = to_user.to_le_bytes().to_vec().into();
+            helper.add_output(sudt_user_output, to_user_amount_data);
+
+            // xt cell of signer fee
+            let signer_lockscript = Script::from_slice(
+                from_ckb_cell_data.signer_lockscript().as_slice(),
+            )
+            .map_err(|e| format!("parse signer_lockscript from tockb_cell_data error: {}", e))?;
+
+            let sudt_signer_output = CellOutput::new_builder()
+                .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
+                .type_(Some(sudt_typescript).pack())
+                .lock(signer_lockscript)
+                .build();
+
+            let to_signer_amount_data = to_signer.to_le_bytes().to_vec().into();
+            helper.add_output(sudt_signer_output, to_signer_amount_data);
+        }
+
+        // add witness
+        {
+            let witness_data = MintXTWitness::new_builder()
+                .spv_proof(spv_proof.into())
+                .cell_dep_index_list(vec![0].into())
+                .build();
+            let witness = WitnessArgs::new_builder()
+                .input_type(Some(witness_data.as_bytes()).pack())
+                .build();
+
+            helper.transaction = helper
+                .transaction
+                .as_advanced_builder()
+                .set_witnesses(vec![witness.as_bytes().pack()])
+                .build();
+        }
+
+        // add signature to pay tx fee
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
         let tx_hash = self
             .rpc_client
@@ -769,6 +1054,17 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                 };
                 self.set_price_oracle(args)
             }
+            ("dev-set-btc-difficulty-cell", Some(m)) => {
+                let args = SetBtcDifficultArgs {
+                    config_path,
+                    privkey_path: get_arg_value(m, "privkey-path")?,
+                    skip_check: false,
+                    difficulty: get_arg_value(m, "difficulty")?
+                        .parse()
+                        .map_err(|e| format!("parse difficulty error: {}", e))?,
+                };
+                self.set_btc_difficulty_cell(args)
+            }
             ("deploy", Some(m)) => {
                 let args = DeployRequestArgs {
                     tx_fee: get_arg_value(m, "tx-fee")?,
@@ -830,8 +1126,38 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     Ok(Output::new_output(tx_hash))
                 }
             }
+            ("mint_xt", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
+                let args = MintXtArgs {
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
+                    spv_proof: get_arg_value(m, "spv-proof")?
+                        .parse()
+                        .map_err(|_e| "parse spv_proof error".to_owned())?,
+                    privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                };
+                let tx = self.mint_xt(args, true, settings)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
             _ => Err(Self::subcommand().generate_usage()),
         }
+    }
+}
+
+pub fn clear_0x(s: &str) -> &str {
+    if &s[..2] == "0x" || &s[..2] == "0X" {
+        &s[2..]
+    } else {
+        s
     }
 }
 
@@ -841,6 +1167,14 @@ pub struct SetPriceOracleArgs {
     pub config_path: String,
     pub skip_check: bool,
     pub price: u128,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetBtcDifficultArgs {
+    pub privkey_path: String,
+    pub config_path: String,
+    pub skip_check: bool,
+    pub difficulty: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -883,6 +1217,17 @@ pub struct BondingArgs {
 
     pub lock_address: String,
     pub signer_lockscript_addr: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct MintXtArgs {
+    pub privkey_path: String,
+    pub tx_fee: String,
+
+    pub cell_path: String,
+    pub cell: Option<String>,
+
+    pub spv_proof: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

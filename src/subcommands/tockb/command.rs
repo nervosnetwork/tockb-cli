@@ -7,7 +7,7 @@ use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockView, Capacity, DepType, TransactionView},
-    packed::{Byte32, CellDep, CellOutput, OutPoint, Script, WitnessArgs},
+    packed::{Byte32, CellDep, CellInput, CellOutput, OutPoint, Script, WitnessArgs},
     prelude::*,
     H256,
 };
@@ -16,7 +16,7 @@ use int_enum::IntEnum;
 use molecule::prelude::Byte;
 use serde::{Deserialize, Serialize};
 use tockb_types::{
-    config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, UDT_LEN, XT_CELL_CAPACITY},
+    config::{CKB_UNITS, PLEDGE, SIGNER_FEE_RATE, SINCE_AT_TERM_REDEEM, UDT_LEN, XT_CELL_CAPACITY},
     generated::{
         basic,
         btc_difficulty::BTCDifficulty,
@@ -191,6 +191,14 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
                 App::new("pre_term_redeem")
                     .about("user redeem X in advance")
+                    .arg(arg::privkey_path().required(true))
+                    .arg(arg::tx_fee().required(true))
+                    .arg(Arg::from("--unlock-address=[unlock-address] 'unlock-address'").required(true))
+                    .arg(Arg::from("--redeemer-lockscript-addr=[redeemer-lockscript-addr] 'redeemer-lockscript-addr'").required(true))
+                    .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
+                    .arg(Arg::from("-c --cell=[cell] 'cell'")),
+                App::new("at_term_redeem")
+                    .about("user redeem X at term")
                     .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
                     .arg(Arg::from("--unlock-address=[unlock-address] 'unlock-address'").required(true))
@@ -781,13 +789,14 @@ impl<'a> ToCkbSubCommand<'a> {
         Ok(tx)
     }
 
-    pub fn pre_term_redeem(
+    pub fn redeem(
         &mut self,
-        args: PreTermRedeemArgs,
+        args: RedeemArgs,
         skip_check: bool,
         settings: Settings,
+        is_at_term: bool,
     ) -> Result<TransactionView, String> {
-        let PreTermRedeemArgs {
+        let RedeemArgs {
             privkey_path,
             tx_fee,
             cell_path,
@@ -816,7 +825,23 @@ impl<'a> ToCkbSubCommand<'a> {
         }
 
         // get input tockb cell and basic info
-        let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let (from_cell, ckb_cell_data) =
+            self.get_ckb_cell(&mut helper, cell.clone(), !is_at_term)?;
+        if is_at_term {
+            let out_point = get_outpoint(cell)?;
+            let input = CellInput::new_builder()
+                .previous_output(out_point.clone())
+                .since(SINCE_AT_TERM_REDEEM.pack())
+                .build();
+            let genesis_info = self.genesis_info()?;
+            helper.transaction = helper
+                .transaction
+                .as_advanced_builder()
+                .cell_dep(genesis_info.sighash_dep())
+                .input(input)
+                .build();
+        }
+
         let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
             Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
             None => return Err("typescript of tockb cell is none".to_owned()),
@@ -841,16 +866,21 @@ impl<'a> ToCkbSubCommand<'a> {
             .payload()
             .into();
 
-        let (redeemer_is_depositor, user_lockscript) = {
+        let (redeemer_is_depositor, depositor_lockscript) = {
             let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
             let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
             let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
-            let redeemer_lockscript = Script::from(&from_address_payload);
+            let from_lockscript = Script::from(&from_address_payload);
             (
-                data_view.user_lockscript == redeemer_lockscript.as_bytes(),
+                data_view.user_lockscript == from_lockscript.as_bytes(),
                 data_view.user_lockscript.clone(),
             )
         };
+
+        // check if redeemer is depositor when at_term_redeem
+        if is_at_term && !redeemer_is_depositor {
+            return Err("at_term_redeem tx must be sent by depositor".to_owned());
+        }
 
         // gen output of tockb cell
         {
@@ -897,7 +927,7 @@ impl<'a> ToCkbSubCommand<'a> {
                     .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
                     .type_(Some(sudt_typescript).pack())
                     .lock(
-                        Script::from_slice(user_lockscript.as_ref())
+                        Script::from_slice(depositor_lockscript.as_ref())
                             .expect("user_lockscript decode from input_data error"),
                     )
                     .build();
@@ -1052,15 +1082,7 @@ impl<'a> ToCkbSubCommand<'a> {
         cell: String,
         add_to_input: bool,
     ) -> Result<(CellOutput, Bytes), String> {
-        let parts: Vec<_> = cell.split('.').collect();
-        let original_tx_hash: String = parts[0].to_string();
-        let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
-
-        let original_tx_outpoint = OutPoint::new_builder()
-            .index(original_tx_output_index.pack())
-            .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
-            .build();
-
+        let original_tx_outpoint = get_outpoint(cell)?;
         if add_to_input {
             let genesis_info = self.genesis_info()?;
 
@@ -1360,7 +1382,7 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                 let settings = Settings::new(&config_path).map_err(|e| {
                     format!("failed to load config from {}, err: {}", &config_path, e)
                 })?;
-                let args = PreTermRedeemArgs {
+                let args = RedeemArgs {
                     cell: m.value_of("cell").map(|s| s.to_string()),
                     cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
                     privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
@@ -1369,7 +1391,29 @@ impl<'a> CliSubCommand for ToCkbSubCommand<'a> {
                     redeemer_lockscript_addr: get_arg_value(m, "redeemer-lockscript-addr")
                         .map(|s| s.to_string())?,
                 };
-                let tx = self.pre_term_redeem(args, true, settings)?;
+                let tx = self.redeem(args, true, settings, false)?;
+                if debug {
+                    let rpc_tx_view = json_types::TransactionView::from(tx);
+                    Ok(Output::new_output(rpc_tx_view))
+                } else {
+                    let tx_hash: H256 = tx.hash().unpack();
+                    Ok(Output::new_output(tx_hash))
+                }
+            }
+            ("at_term_redeem", Some(m)) => {
+                let settings = Settings::new(&config_path).map_err(|e| {
+                    format!("failed to load config from {}, err: {}", &config_path, e)
+                })?;
+                let args = RedeemArgs {
+                    cell: m.value_of("cell").map(|s| s.to_string()),
+                    cell_path: get_arg_value(m, "cell-path").map(|s| s.to_string())?,
+                    privkey_path: get_arg_value(m, "privkey-path").map(|s| s.to_string())?,
+                    tx_fee: get_arg_value(m, "tx-fee")?,
+                    x_unlock_address: get_arg_value(m, "unlock-address").map(|s| s.to_string())?,
+                    redeemer_lockscript_addr: get_arg_value(m, "redeemer-lockscript-addr")
+                        .map(|s| s.to_string())?,
+                };
+                let tx = self.redeem(args, true, settings, true)?;
                 if debug {
                     let rpc_tx_view = json_types::TransactionView::from(tx);
                     Ok(Output::new_output(rpc_tx_view))
@@ -1389,6 +1433,17 @@ pub fn clear_0x(s: &str) -> &str {
     } else {
         s
     }
+}
+
+pub fn get_outpoint(cell: String) -> Result<OutPoint, String> {
+    let parts: Vec<_> = cell.split('.').collect();
+    let original_tx_hash: String = parts[0].to_string();
+    let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
+
+    Ok(OutPoint::new_builder()
+        .index(original_tx_output_index.pack())
+        .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
+        .build())
 }
 
 #[derive(Clone, Debug)]
@@ -1461,7 +1516,7 @@ pub struct MintXtArgs {
 }
 
 #[derive(Clone, Debug)]
-pub struct PreTermRedeemArgs {
+pub struct RedeemArgs {
     pub privkey_path: String,
     pub tx_fee: String,
 

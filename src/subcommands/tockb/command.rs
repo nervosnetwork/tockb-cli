@@ -184,7 +184,7 @@ impl<'a> ToCkbSubCommand<'a> {
                     .arg(Arg::from("-c --cell=[cell] 'cell'")),
                 App::new("withdraw_collateral")
                     .about("withdraw collateral")
-                    .arg(arg::privkey_path().required_unless(arg::from_account().get_name()))
+                    .arg(arg::privkey_path().required(true))
                     .arg(arg::tx_fee().required(true))
                     .arg(Arg::from("--cell-path=[cell-path] 'cell-path'").default_value("./.ckb_cell.toml"))
                     .arg(Arg::from("-c --cell=[cell] 'cell'"))
@@ -877,8 +877,9 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let (ckb_cell, _) = self.get_ckb_cell(&mut helper, cell, true)?;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
-        let to_capacity = input_capacity - 200 * 100_000_000;
+        let to_capacity = input_capacity;
 
+        let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
         let lockscript_out_point = OutPoint::new_builder()
             .tx_hash(
                 Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
@@ -904,6 +905,7 @@ impl<'a> ToCkbSubCommand<'a> {
         helper.transaction = helper
             .transaction
             .as_advanced_builder()
+            .cell_dep(btc_difficulty_dep)
             .cell_dep(typescript_cell_dep)
             .cell_dep(lockscript_cell_dep)
             .build();

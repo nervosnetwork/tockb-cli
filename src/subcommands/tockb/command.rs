@@ -939,9 +939,10 @@ impl<'a> ToCkbSubCommand<'a> {
             cell_path,
             cell,
             spv_proof,
-        }
+        } = args;
+
         let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
-        .or(cell.ok_or("cell is none".to_string()))?;
+            .or(cell.ok_or("cell is none".to_string()))?;
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
         let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
@@ -953,36 +954,12 @@ impl<'a> ToCkbSubCommand<'a> {
         let input_capacity: u64 = ckb_cell.capacity().unpack();
         let to_capacity = input_capacity;
 
-        let btc_difficulty_dep = self.get_btc_difficulty_dep(&settings)?;
-        let lockscript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(&hex::decode(settings.lockscript.outpoint.tx_hash).unwrap())
-                    .unwrap(),
-            )
-            .index(settings.lockscript.outpoint.index.pack())
-            .build();
-        let typescript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(&hex::decode(settings.typescript.outpoint.tx_hash).unwrap())
-                    .unwrap(),
-            )
-            .index(settings.typescript.outpoint.index.pack())
-            .build();
-        let typescript_cell_dep = CellDep::new_builder()
-            .out_point(typescript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        let lockscript_cell_dep = CellDep::new_builder()
-            .out_point(lockscript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        helper.transaction = helper
-            .transaction
-            .as_advanced_builder()
-            .cell_dep(btc_difficulty_dep)
-            .cell_dep(typescript_cell_dep)
-            .cell_dep(lockscript_cell_dep)
-            .build();
+        let outpoints = vec![
+            settings.btc_difficulty_cell.outpoint,
+            settings.lockscript.outpoint,
+            settings.typescript.outpoint,
+        ];
+        self.add_cell_deps(&mut helper, outpoints)?;
 
         {
             let spv_proof = hex::decode(clear_0x(spv_proof.as_str()))
@@ -1018,7 +995,7 @@ impl<'a> ToCkbSubCommand<'a> {
         ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
-    
+
     fn supply_capacity(
         &mut self,
         helper: &mut TxHelper,

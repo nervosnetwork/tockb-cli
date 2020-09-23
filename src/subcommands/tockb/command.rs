@@ -829,11 +829,6 @@ impl<'a> ToCkbSubCommand<'a> {
             let mut since = None;
             if is_at_term {
                 since = Some(SINCE_AT_TERM_REDEEM);
-
-                // Todo next 3 lines are only used for test
-                let LOCK_TYPE_FLAG: u64 = 1 << 63;
-                let SINCE_TYPE_TIMESTAMP: u64 = 0x4000_0000_0000_0000;
-                since = Some(LOCK_TYPE_FLAG | SINCE_TYPE_TIMESTAMP | 3600)
             }
             self.get_ckb_cell(&mut helper, cell.clone(), since, true)?
         };

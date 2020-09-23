@@ -574,7 +574,7 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let mut helper = TxHelper::default();
 
-        let (ckb_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let (ckb_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, None, true)?;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
 
         let type_script = ckb_cell
@@ -665,7 +665,7 @@ impl<'a> ToCkbSubCommand<'a> {
         self.add_cell_deps(&mut helper, outpoints)?;
 
         // get input tockb cell and basic info
-        let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
+        let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, None, true)?;
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
 
         let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
@@ -825,22 +825,18 @@ impl<'a> ToCkbSubCommand<'a> {
         }
 
         // get input tockb cell and basic info
-        let (from_cell, ckb_cell_data) =
-            self.get_ckb_cell(&mut helper, cell.clone(), !is_at_term)?;
-        if is_at_term {
-            let out_point = get_outpoint(cell)?;
-            let input = CellInput::new_builder()
-                .previous_output(out_point.clone())
-                .since(SINCE_AT_TERM_REDEEM.pack())
-                .build();
-            let genesis_info = self.genesis_info()?;
-            helper.transaction = helper
-                .transaction
-                .as_advanced_builder()
-                .cell_dep(genesis_info.sighash_dep())
-                .input(input)
-                .build();
-        }
+        let (from_cell, ckb_cell_data) = {
+            let mut since = None;
+            if is_at_term {
+                since = Some(SINCE_AT_TERM_REDEEM);
+
+                // Todo next 3 lines are only used for test
+                let LOCK_TYPE_FLAG: u64 = 1 << 63;
+                let SINCE_TYPE_TIMESTAMP: u64 = 0x4000_0000_0000_0000;
+                since = Some(LOCK_TYPE_FLAG | SINCE_TYPE_TIMESTAMP | 3600)
+            }
+            self.get_ckb_cell(&mut helper, cell.clone(), since, true)?
+        };
 
         let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
             Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
@@ -1080,9 +1076,18 @@ impl<'a> ToCkbSubCommand<'a> {
         &mut self,
         helper: &mut TxHelper,
         cell: String,
+        since: Option<u64>,
         add_to_input: bool,
     ) -> Result<(CellOutput, Bytes), String> {
-        let original_tx_outpoint = get_outpoint(cell)?;
+        let parts: Vec<_> = cell.split('.').collect();
+        let original_tx_hash: String = parts[0].to_string();
+        let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
+
+        let original_tx_outpoint = OutPoint::new_builder()
+            .index(original_tx_output_index.pack())
+            .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
+            .build();
+
         if add_to_input {
             let genesis_info = self.genesis_info()?;
 
@@ -1092,7 +1097,7 @@ impl<'a> ToCkbSubCommand<'a> {
 
             helper.add_input(
                 original_tx_outpoint.clone(),
-                None,
+                since,
                 &mut get_live_cell_fn,
                 &genesis_info,
                 true,

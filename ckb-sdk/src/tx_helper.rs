@@ -81,7 +81,7 @@ impl TxHelper {
     pub fn add_input<F: FnMut(OutPoint, bool) -> Result<CellOutput, String>>(
         &mut self,
         out_point: OutPoint,
-        since_absolute_epoch_opt: Option<u64>,
+        since: Option<u64>,
         mut get_live_cell: F,
         genesis_info: &GenesisInfo,
         skip_check: bool,
@@ -89,8 +89,8 @@ impl TxHelper {
         let lock = get_live_cell(out_point.clone(), false)?.lock();
         check_lock_script(&lock, skip_check)?;
 
-        let since = if let Some(number) = since_absolute_epoch_opt {
-            Since::new_absolute_epoch(number).value()
+        let since = if let Some(number) = since {
+            Since::from_raw_value(number).value()
         } else {
             let lock_arg = lock.args().raw_data();
             if lock.code_hash() == MULTISIG_TYPE_HASH.pack() && lock_arg.len() == 28 {

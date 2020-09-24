@@ -7,7 +7,7 @@ use ckb_jsonrpc_types as json_types;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockView, Capacity, DepType, TransactionView},
-    packed::{Byte32, CellDep, CellInput, CellOutput, OutPoint, Script, WitnessArgs},
+    packed::{Byte32, CellDep, CellOutput, OutPoint, Script, WitnessArgs},
     prelude::*,
     H256,
 };
@@ -868,11 +868,6 @@ impl<'a> ToCkbSubCommand<'a> {
             )
         };
 
-        // check if redeemer is depositor when at_term_redeem
-        if is_at_term && !redeemer_is_depositor {
-            return Err("at_term_redeem tx must be sent by depositor".to_owned());
-        }
-
         // gen output of tockb cell
         {
             let to_capacity = from_capacity;
@@ -901,7 +896,7 @@ impl<'a> ToCkbSubCommand<'a> {
         {
             let signer_fee = lot_amount * SIGNER_FEE_RATE.0 / SIGNER_FEE_RATE.1;
             let mut need_sudt_amount = lot_amount;
-            if !redeemer_is_depositor {
+            if !is_at_term && !redeemer_is_depositor {
                 need_sudt_amount += signer_fee;
             }
 
@@ -913,7 +908,7 @@ impl<'a> ToCkbSubCommand<'a> {
                 skip_check,
             )?;
 
-            if !redeemer_is_depositor {
+            if !is_at_term && !redeemer_is_depositor {
                 let to_depositor_xt_cell = CellOutput::new_builder()
                     .capacity(Capacity::shannons(XT_CELL_CAPACITY).pack())
                     .type_(Some(sudt_typescript).pack())
@@ -1433,17 +1428,6 @@ pub fn clear_0x(s: &str) -> &str {
     } else {
         s
     }
-}
-
-pub fn get_outpoint(cell: String) -> Result<OutPoint, String> {
-    let parts: Vec<_> = cell.split('.').collect();
-    let original_tx_hash: String = parts[0].to_string();
-    let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
-
-    Ok(OutPoint::new_builder()
-        .index(original_tx_output_index.pack())
-        .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
-        .build())
 }
 
 #[derive(Clone, Debug)]

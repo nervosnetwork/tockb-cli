@@ -21,12 +21,12 @@ use tockb_types::{
         basic,
         btc_difficulty::BTCDifficulty,
         mint_xt_witness::{BTCSPVProof, MintXTWitness},
-        tockb_cell_data::ToCKBCellData,
+        tockb_cell_data::{ToCKBCellData, ToCKBTypeArgs},
     },
-    BtcExtraView, ToCKBCellDataView, ToCKBStatus, XChainKind, XExtraView,
+    BtcExtraView, ToCKBCellDataView, ToCKBStatus, ToCKBTypeArgsView, XChainKind, XExtraView,
 };
 
-use super::config::{CKBCell, OutpointConf, ScriptConf, ScriptsConf, Settings};
+use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings, TypeScriptHash};
 use crate::plugin::PluginManager;
 pub use crate::subcommands::wallet::start_index_thread;
 use crate::subcommands::{CliSubCommand, Output};
@@ -476,40 +476,72 @@ impl<'a> ToCkbSubCommand<'a> {
         let to_capacity = pledge * CKB_UNITS;
         let mut helper = TxHelper::default();
 
-        let lockscript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(
-                    &hex::decode(settings.lockscript.outpoint.tx_hash)
-                        .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
-                )
-                .map_err(|e| format!("invalid lockscript config. err: {}", e))?,
-            )
-            .index(settings.lockscript.outpoint.index.pack())
-            .build();
-        let typescript_out_point = OutPoint::new_builder()
-            .tx_hash(
-                Byte32::from_slice(
-                    &hex::decode(settings.typescript.outpoint.tx_hash)
-                        .map_err(|e| format!("invalid typescript config. err: {}", e))?,
-                )
-                .map_err(|e| format!("invalid typescript config. err: {}", e))?,
-            )
-            .index(settings.typescript.outpoint.index.pack())
-            .build();
-        let typescript_cell_dep = CellDep::new_builder()
-            .out_point(typescript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        let lockscript_cell_dep = CellDep::new_builder()
-            .out_point(lockscript_out_point)
-            .dep_type(DepType::Code.into())
-            .build();
-        helper.transaction = helper
-            .transaction
-            .as_advanced_builder()
-            .cell_dep(typescript_cell_dep)
-            .cell_dep(lockscript_cell_dep)
-            .build();
+        let outpoints = vec![settings.typescript.outpoint, settings.lockscript.outpoint];
+        self.add_cell_deps(&mut helper, outpoints)?;
+
+        let network_type = get_network_type(self.rpc_client)?;
+        let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
+        let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
+        let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
+        let lock_hash = Script::from(&from_address_payload).calc_script_hash();
+
+        if self.wait_for_sync {
+            sync_to_tip(&self.index_controller)?;
+        }
+        let max_mature_number = get_max_mature_number(self.rpc_client)?;
+        let index_dir = self.index_dir.clone();
+        let genesis_info = self.genesis_info()?;
+
+        self.with_db(|_| ())?;
+
+        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+            get_live_cell(self.rpc_client, out_point, with_data).map(|(output, _)| output)
+        };
+
+        let genesis_hash = genesis_info.header().hash();
+        let genesis_info_clone = genesis_info.clone();
+        let mut infos: Vec<LiveCellInfo> = Default::default();
+        let mut terminator = |_, info: &LiveCellInfo| {
+            if info.type_hashes.is_none()
+                && info.data_bytes == 0
+                && is_mature(info, max_mature_number)
+                && info.capacity > 0
+            {
+                infos.push(info.clone());
+                (true, false)
+            } else {
+                (false, false)
+            }
+        };
+        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
+            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
+                .map(|db| {
+                    db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
+                })
+                .map_err(Into::into)
+        }) {
+            return Err(format!(
+                "Index database may not ready, sync process: {}, error: {}",
+                self.index_controller.state().read().to_string(),
+                err.to_string(),
+            ));
+        }
+
+        if infos.len() != 1 {
+            return Err(format!(
+                "get wrong live cells from lock, expected length: 1, error: {}",
+                infos.len()
+            ));
+        }
+        let init_info = &infos[0];
+        helper.add_input(
+            init_info.clone().out_point(),
+            None,
+            &mut get_live_cell_fn,
+            &genesis_info,
+            skip_check,
+        )?;
+
         let tockb_data = ToCKBCellData::new_builder()
             .status(Byte::new(ToCKBStatus::Initial.int_value()))
             .lot_size(Byte::new(lot_size))
@@ -521,10 +553,16 @@ impl<'a> ToCkbSubCommand<'a> {
             hex::decode(settings.lockscript.code_hash).expect("wrong lockscript code hash config");
         let typescript_code_hash =
             hex::decode(settings.typescript.code_hash).expect("wrong typescript code hash config");
+
+        let typescript_args = ToCKBTypeArgs::new_builder()
+            .xchain_kind(Byte::new(kind))
+            .cell_id(basic::OutPoint::from_slice(init_info.out_point().as_slice()).unwrap())
+            .build();
+
         let typescript = Script::new_builder()
             .code_hash(Byte32::from_slice(&typescript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(vec![kind].pack())
+            .args(typescript_args.as_bytes().pack())
             .build();
         let typescript_hash = typescript.calc_script_hash();
         let lockscript = Script::new_builder()
@@ -546,7 +584,10 @@ impl<'a> ToCkbSubCommand<'a> {
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
 
-        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
+        ToCkbSubCommand::write_typescript_hash_config(
+            cell_path,
+            hex::encode(typescript_hash.as_slice()),
+        )?;
         Ok(tx)
     }
 
@@ -565,7 +606,7 @@ impl<'a> ToCkbSubCommand<'a> {
             lock_address,
         } = args;
 
-        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+        let cell = ToCkbSubCommand::read_typescript_hash_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let signer_lockscript: Script =
@@ -576,14 +617,17 @@ impl<'a> ToCkbSubCommand<'a> {
         let (ckb_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
         let input_capacity: u64 = ckb_cell.capacity().unpack();
 
-        let type_script = ckb_cell
+        let tockb_typescript = ckb_cell
             .type_()
             .to_opt()
             .expect("should return ckb type script");
-        let lock_script = ckb_cell.lock();
-        let kind: u8 = type_script.args().as_bytes()[0];
+        let tockb_lockscript = ckb_cell.lock();
+
+        let typescript_args =
+            ToCKBTypeArgsView::from_slice(tockb_typescript.args().raw_data().as_ref())
+                .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
         let data_view: ToCKBCellDataView =
-            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
+            ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
                 .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
 
         let sudt_amount: u128 = data_view
@@ -616,8 +660,8 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
-            .type_(Some(type_script).pack())
-            .lock(lock_script)
+            .type_(Some(tockb_typescript).pack())
+            .lock(tockb_lockscript)
             .build();
         helper.add_output(to_output, tockb_data.clone());
         let tx = self.supply_capacity(&mut helper, tx_fee, privkey_path, skip_check)?;
@@ -627,8 +671,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
-
-        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -645,7 +687,7 @@ impl<'a> ToCkbSubCommand<'a> {
             cell,
             spv_proof,
         } = args;
-        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+        let cell = ToCkbSubCommand::read_typescript_hash_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
 
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
@@ -667,15 +709,18 @@ impl<'a> ToCkbSubCommand<'a> {
         let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
         let from_ckb_cell_data = ToCKBCellData::from_slice(ckb_cell_data.as_ref()).unwrap();
 
-        let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
-            Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
-            None => return Err("typescript of tockb cell is none".to_owned()),
-        };
+        let tockb_typescript = from_cell
+            .type_()
+            .to_opt()
+            .expect("should return ckb type script");
         let tockb_lockscript = from_cell.lock();
 
-        let data_view =
-            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
-                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+        let typescript_args =
+            ToCKBTypeArgsView::from_slice(tockb_typescript.args().raw_data().as_ref())
+                .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
+
+        let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
+            .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
         let lot_amount = data_view
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
@@ -783,8 +828,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
-
-        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -804,7 +847,7 @@ impl<'a> ToCkbSubCommand<'a> {
             redeemer_lockscript_addr,
         } = args;
 
-        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+        let cell = ToCkbSubCommand::read_typescript_hash_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
         let tx_fee: u64 = CapacityParser.parse(&tx_fee)?.into();
         let mut helper = TxHelper::default();
@@ -824,14 +867,17 @@ impl<'a> ToCkbSubCommand<'a> {
 
         // get input tockb cell and basic info
         let (from_cell, ckb_cell_data) = self.get_ckb_cell(&mut helper, cell, true)?;
-        let (tockb_typescript, kind) = match from_cell.type_().to_opt() {
-            Some(script) => (script.clone(), script.args().raw_data().as_ref()[0]),
-            None => return Err("typescript of tockb cell is none".to_owned()),
-        };
+        let tockb_typescript = from_cell
+            .type_()
+            .to_opt()
+            .expect("should return ckb type script");
         let tockb_lockscript = from_cell.lock();
-        let data_view =
-            ToCKBCellDataView::new(ckb_cell_data.as_ref(), XChainKind::from_int(kind).unwrap())
-                .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+
+        let typescript_args =
+            ToCKBTypeArgsView::from_slice(tockb_typescript.args().raw_data().as_ref())
+                .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
+        let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
+            .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
         let lot_amount = data_view
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
@@ -922,8 +968,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
-
-        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -941,7 +985,7 @@ impl<'a> ToCkbSubCommand<'a> {
             spv_proof,
         } = args;
 
-        let cell = ToCkbSubCommand::read_ckb_cell_config(cell_path.clone())
+        let cell = ToCkbSubCommand::read_typescript_hash_config(cell_path.clone())
             .or(cell.ok_or("cell is none".to_string()))?;
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
@@ -991,8 +1035,6 @@ impl<'a> ToCkbSubCommand<'a> {
             .map_err(|err| format!("Send transaction error: {}", err))?;
         assert_eq!(tx.hash(), tx_hash.pack());
         self.wait_for_commited(tx_hash.clone(), TIMEOUT)?;
-
-        ToCkbSubCommand::write_ckb_cell_config(cell_path, tx_hash.to_string(), 0)?;
         Ok(tx)
     }
 
@@ -1128,14 +1170,35 @@ impl<'a> ToCkbSubCommand<'a> {
         cell: String,
         add_to_input: bool,
     ) -> Result<(CellOutput, Bytes), String> {
-        let parts: Vec<_> = cell.split('.').collect();
-        let original_tx_hash: String = parts[0].to_string();
-        let original_tx_output_index: u32 = parts[1].parse::<u32>().unwrap();
+        let typescript_hash = Byte32::from_slice(
+            &hex::decode(cell).map_err(|e| format!("invalid OutpointConf config. err: {}", e))?,
+        )
+        .map_err(|e| format!("invalid OutpointConf config. err: {}", e))?;
+        let network_type = get_network_type(self.rpc_client)?;
+        let index_dir = self.index_dir.clone();
+        let genesis_info = self.genesis_info()?;
+        let genesis_hash = genesis_info.header().hash();
+        let genesis_info_clone = genesis_info.clone();
+        let mut cell_info: LiveCellInfo = Default::default();
+        let mut terminator = |_, info: &LiveCellInfo| {
+            cell_info = (*info).clone();
+            (true, false)
+        };
+        self.with_db(|_| ())?;
 
-        let original_tx_outpoint = OutPoint::new_builder()
-            .index(original_tx_output_index.pack())
-            .tx_hash(Byte32::from_slice(&hex::decode(original_tx_hash).unwrap()).unwrap())
-            .build();
+        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
+            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
+                .map(|db| {
+                    db.get_live_cells_by_type(typescript_hash, None, &mut terminator);
+                })
+                .map_err(Into::into)
+        }) {
+            return Err(format!(
+                "Index database may not ready, sync process: {}, error: {}",
+                self.index_controller.state().read().to_string(),
+                err.to_string(),
+            ));
+        }
 
         if add_to_input {
             let genesis_info = self.genesis_info()?;
@@ -1145,7 +1208,7 @@ impl<'a> ToCkbSubCommand<'a> {
             };
 
             helper.add_input(
-                original_tx_outpoint.clone(),
+                cell_info.out_point(),
                 None,
                 &mut get_live_cell_fn,
                 &genesis_info,
@@ -1153,22 +1216,24 @@ impl<'a> ToCkbSubCommand<'a> {
             )?;
         }
 
-        get_live_cell(self.rpc_client, original_tx_outpoint, true)
+        get_live_cell(self.rpc_client, cell_info.out_point(), true)
     }
 
-    fn read_ckb_cell_config(cell_path: String) -> Result<String, String> {
-        let ckb_cell = CKBCell::new(&cell_path)
+    fn read_typescript_hash_config(cell_path: String) -> Result<String, String> {
+        let typescript_hash_config = TypeScriptHash::new(&cell_path)
             .map_err(|e| format!("failed to load ckb cell from {}, err: {}", &cell_path, e))?;
-        let cell = ckb_cell.outpoint.tx_hash + "." + &ckb_cell.outpoint.index.to_string();
-        Ok(cell.to_string())
+        Ok(typescript_hash_config.typescript_hash)
     }
 
-    fn write_ckb_cell_config(cell_path: String, tx_hash: String, index: u32) -> Result<(), String> {
-        let mut ckb_cell = CKBCell::default();
-        ckb_cell.outpoint = OutpointConf { tx_hash, index };
-        let s = toml::to_string(&ckb_cell).expect("toml serde error");
+    fn write_typescript_hash_config(
+        cell_path: String,
+        typescript_hash: String,
+    ) -> Result<(), String> {
+        let mut typescript_hash_config = TypeScriptHash::default();
+        typescript_hash_config.typescript_hash = typescript_hash;
+        let s = toml::to_string(&typescript_hash_config).expect("toml serde error");
         println!("ckb cell: \n\n{}", &s);
-        ckb_cell.write(&cell_path)
+        typescript_hash_config.write(&cell_path)
     }
 
     fn add_cell_deps(

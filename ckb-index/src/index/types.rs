@@ -578,7 +578,7 @@ pub(crate) struct ApplyResult {
     pub txs: u32,
 }
 
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LiveCellInfo {
     pub tx_hash: H256,
     pub output_index: u32,
@@ -604,7 +604,7 @@ impl LiveCellInfo {
 }
 
 // LiveCell index in a block
-#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct CellIndex {
     // The transaction index in the block
     pub tx_index: u32,

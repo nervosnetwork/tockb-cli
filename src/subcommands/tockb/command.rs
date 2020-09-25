@@ -26,7 +26,7 @@ use tockb_types::{
     BtcExtraView, ToCKBCellDataView, ToCKBStatus, ToCKBTypeArgsView, XExtraView,
 };
 
-use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings, TypeScriptHash};
+use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings, ToCkbCellId};
 use crate::plugin::PluginManager;
 pub use crate::subcommands::wallet::start_index_thread;
 use crate::subcommands::{CliSubCommand, Output};
@@ -1185,17 +1185,17 @@ impl<'a> ToCkbSubCommand<'a> {
     }
 
     fn read_typescript_hash_config(cell_path: String) -> Result<String, String> {
-        let typescript_hash_config = TypeScriptHash::new(&cell_path)
+        let typescript_hash_config = ToCkbCellId::new(&cell_path)
             .map_err(|e| format!("failed to load ckb cell from {}, err: {}", &cell_path, e))?;
-        Ok(typescript_hash_config.typescript_hash)
+        Ok(typescript_hash_config.inner)
     }
 
     fn write_typescript_hash_config(
         cell_path: String,
         typescript_hash: String,
     ) -> Result<(), String> {
-        let mut typescript_hash_config = TypeScriptHash::default();
-        typescript_hash_config.typescript_hash = typescript_hash;
+        let mut typescript_hash_config = ToCkbCellId::default();
+        typescript_hash_config.inner = typescript_hash;
         let s = toml::to_string(&typescript_hash_config).expect("toml serde error");
         println!("ckb cell: \n\n{}", &s);
         typescript_hash_config.write(&cell_path)

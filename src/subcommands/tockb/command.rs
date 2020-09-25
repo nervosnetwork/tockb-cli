@@ -23,7 +23,7 @@ use tockb_types::{
         mint_xt_witness::{BTCSPVProof, MintXTWitness},
         tockb_cell_data::{ToCKBCellData, ToCKBTypeArgs},
     },
-    BtcExtraView, ToCKBCellDataView, ToCKBStatus, ToCKBTypeArgsView, XChainKind, XExtraView,
+    BtcExtraView, ToCKBCellDataView, ToCKBStatus, ToCKBTypeArgsView, XExtraView,
 };
 
 use super::config::{OutpointConf, ScriptConf, ScriptsConf, Settings, TypeScriptHash};
@@ -479,7 +479,6 @@ impl<'a> ToCkbSubCommand<'a> {
         let outpoints = vec![settings.typescript.outpoint, settings.lockscript.outpoint];
         self.add_cell_deps(&mut helper, outpoints)?;
 
-        let network_type = get_network_type(self.rpc_client)?;
         let from_privkey = PrivkeyPathParser.parse(&privkey_path)?;
         let from_pubkey = secp256k1::PublicKey::from_secret_key(&SECP256K1, &from_privkey);
         let from_address_payload = AddressPayload::from_pubkey(&from_pubkey);
@@ -489,53 +488,31 @@ impl<'a> ToCkbSubCommand<'a> {
             sync_to_tip(&self.index_controller)?;
         }
         let max_mature_number = get_max_mature_number(self.rpc_client)?;
-        let index_dir = self.index_dir.clone();
         let genesis_info = self.genesis_info()?;
 
-        self.with_db(|_| ())?;
-
-        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
-            get_live_cell(self.rpc_client, out_point, with_data).map(|(output, _)| output)
-        };
-
-        let genesis_hash = genesis_info.header().hash();
-        let genesis_info_clone = genesis_info.clone();
-        let mut infos: Vec<LiveCellInfo> = Default::default();
+        let mut cell_info: LiveCellInfo = Default::default();
         let mut terminator = |_, info: &LiveCellInfo| {
             if info.type_hashes.is_none()
                 && info.data_bytes == 0
                 && is_mature(info, max_mature_number)
                 && info.capacity > 0
             {
-                infos.push(info.clone());
+                cell_info = (*info).clone();
                 (true, false)
             } else {
                 (false, false)
             }
         };
-        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
-            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
-                .map(|db| {
-                    db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
-                })
-                .map_err(Into::into)
-        }) {
-            return Err(format!(
-                "Index database may not ready, sync process: {}, error: {}",
-                self.index_controller.state().read().to_string(),
-                err.to_string(),
-            ));
-        }
+        let db_func = |db: IndexDatabase| {
+            db.get_live_cells_by_lock(lock_hash, None, &mut terminator);
+        };
+        self.with_db(db_func)?;
 
-        if infos.len() != 1 {
-            return Err(format!(
-                "get wrong live cells from lock, expected length: 1, error: {}",
-                infos.len()
-            ));
-        }
-        let init_info = &infos[0];
+        let mut get_live_cell_fn = |out_point: OutPoint, with_data: bool| {
+            get_live_cell(self.rpc_client, out_point, with_data).map(|(output, _)| output)
+        };
         helper.add_input(
-            init_info.clone().out_point(),
+            cell_info.out_point(),
             None,
             &mut get_live_cell_fn,
             &genesis_info,
@@ -556,7 +533,7 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let typescript_args = ToCKBTypeArgs::new_builder()
             .xchain_kind(Byte::new(kind))
-            .cell_id(basic::OutPoint::from_slice(init_info.out_point().as_slice()).unwrap())
+            .cell_id(basic::OutPoint::from_slice(cell_info.out_point().as_slice()).unwrap())
             .build();
 
         let typescript = Script::new_builder()
@@ -629,7 +606,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let data_view: ToCKBCellDataView =
             ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
                 .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
-
+        dbg!(data_view.clone());
         let sudt_amount: u128 = data_view
             .get_lot_xt_amount()
             .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
@@ -721,6 +698,8 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
             .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+        dbg!(data_view.clone());
+
         let lot_amount = data_view
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
@@ -878,6 +857,8 @@ impl<'a> ToCkbSubCommand<'a> {
                 .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
         let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
             .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
+        dbg!(data_view.clone());
+
         let lot_amount = data_view
             .get_lot_xt_amount()
             .map_err(|_| "get lot_amount from tockb cell data error".to_owned())?;
@@ -1174,31 +1155,15 @@ impl<'a> ToCkbSubCommand<'a> {
             &hex::decode(cell).map_err(|e| format!("invalid OutpointConf config. err: {}", e))?,
         )
         .map_err(|e| format!("invalid OutpointConf config. err: {}", e))?;
-        let network_type = get_network_type(self.rpc_client)?;
-        let index_dir = self.index_dir.clone();
-        let genesis_info = self.genesis_info()?;
-        let genesis_hash = genesis_info.header().hash();
-        let genesis_info_clone = genesis_info.clone();
         let mut cell_info: LiveCellInfo = Default::default();
         let mut terminator = |_, info: &LiveCellInfo| {
             cell_info = (*info).clone();
             (true, false)
         };
-        self.with_db(|_| ())?;
-
-        if let Err(err) = with_index_db(&index_dir, genesis_hash.unpack(), |backend, cf| {
-            IndexDatabase::from_db(backend, cf, network_type, genesis_info_clone, false)
-                .map(|db| {
-                    db.get_live_cells_by_type(typescript_hash, None, &mut terminator);
-                })
-                .map_err(Into::into)
-        }) {
-            return Err(format!(
-                "Index database may not ready, sync process: {}, error: {}",
-                self.index_controller.state().read().to_string(),
-                err.to_string(),
-            ));
-        }
+        let db_func = |db: IndexDatabase| {
+            db.get_live_cells_by_type(typescript_hash, None, &mut terminator);
+        };
+        self.with_db(db_func)?;
 
         if add_to_input {
             let genesis_info = self.genesis_info()?;

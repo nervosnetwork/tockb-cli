@@ -545,7 +545,7 @@ impl<'a> ToCkbSubCommand<'a> {
         let lockscript = Script::new_builder()
             .code_hash(Byte32::from_slice(&lockscript_code_hash).unwrap())
             .hash_type(DepType::Code.into())
-            .args(typescript_hash.as_bytes().pack())
+            .args(typescript.as_slice()[0..54].pack())
             .build();
         let to_output = CellOutput::new_builder()
             .capacity(Capacity::shannons(to_capacity).pack())
@@ -599,14 +599,12 @@ impl<'a> ToCkbSubCommand<'a> {
             .to_opt()
             .expect("should return ckb type script");
         let tockb_lockscript = ckb_cell.lock();
-
         let typescript_args =
             ToCKBTypeArgsView::from_slice(tockb_typescript.args().raw_data().as_ref())
                 .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
         let data_view: ToCKBCellDataView =
             ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
                 .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
-        dbg!(data_view.clone());
         let sudt_amount: u128 = data_view
             .get_lot_xt_amount()
             .map_err(|err| format!("get_lot_xt_amount error: {}", err as i8))?;
@@ -698,7 +696,6 @@ impl<'a> ToCkbSubCommand<'a> {
 
         let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
             .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
-        dbg!(data_view.clone());
 
         let lot_amount = data_view
             .get_lot_xt_amount()
@@ -857,7 +854,6 @@ impl<'a> ToCkbSubCommand<'a> {
                 .map_err(|err| format!("Parse to ToCKBTypeArgsView error: {}", err as i8))?;
         let data_view = ToCKBCellDataView::new(ckb_cell_data.as_ref(), typescript_args.xchain_kind)
             .map_err(|err| format!("Parse to ToCKBCellDataView error: {}", err as i8))?;
-        dbg!(data_view.clone());
 
         let lot_amount = data_view
             .get_lot_xt_amount()

@@ -55,11 +55,11 @@ impl Settings {
 }
 
 #[derive(Deserialize, Serialize, Default, Debug, Clone)]
-pub struct CKBCell {
-    pub outpoint: OutpointConf,
+pub struct ToCkbCellId {
+    pub inner: String,
 }
 
-impl CKBCell {
+impl ToCkbCellId {
     pub fn new(config_path: &str) -> Result<Self, ConfigError> {
         let mut s = Config::new();
         s.merge(File::with_name(config_path))?;

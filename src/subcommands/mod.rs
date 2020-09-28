@@ -5,6 +5,7 @@ pub mod mock_tx;
 pub mod molecule;
 pub mod plugin;
 pub mod rpc;
+pub mod sudt;
 pub mod tockb;
 #[cfg(unix)]
 pub mod tui;
@@ -22,6 +23,7 @@ pub use dao::DAOSubCommand;
 pub use mock_tx::MockTxSubCommand;
 pub use plugin::PluginSubCommand;
 pub use rpc::RpcSubCommand;
+pub use sudt::command::SudtSubCommand;
 pub use tockb::command::ToCkbSubCommand;
 pub use tx::TxSubCommand;
 pub use util::UtilSubCommand;

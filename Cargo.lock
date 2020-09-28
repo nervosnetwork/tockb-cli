@@ -336,13 +336,13 @@ source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b
 dependencies = [
  "ckb-crypto",
  "ckb-dao-utils",
- "ckb-error",
- "ckb-hash",
+ "ckb-error 0.35.0-pre",
+ "ckb-hash 0.35.0-pre",
  "ckb-jsonrpc-types",
  "ckb-pow",
- "ckb-rational",
+ "ckb-rational 0.35.0-pre",
  "ckb-resource",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "failure",
  "serde 1.0.105",
  "toml",
@@ -354,7 +354,7 @@ version = "0.1.0"
 dependencies = [
  "ckb-index",
  "ckb-jsonrpc-types",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "faster-hex 0.3.1",
  "serde 1.0.105",
  "serde_derive",
@@ -366,7 +366,7 @@ name = "ckb-crypto"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-fixed-hash",
+ "ckb-fixed-hash 0.35.0-pre",
  "failure",
  "faster-hex 0.4.1",
  "lazy_static",
@@ -380,10 +380,21 @@ version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
  "byteorder",
- "ckb-error",
- "ckb-types",
+ "ckb-error 0.35.0-pre",
+ "ckb-types 0.35.0-pre",
  "enum-display-derive",
  "failure",
+]
+
+[[package]]
+name = "ckb-error"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "ckb-occupied-capacity 0.34.1",
+ "enum-display-derive",
+ "failure",
+ "quote 1.0.3",
 ]
 
 [[package]]
@@ -391,7 +402,7 @@ name = "ckb-error"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-occupied-capacity",
+ "ckb-occupied-capacity 0.35.0-pre",
  "enum-display-derive",
  "failure",
  "quote 1.0.3",
@@ -399,12 +410,32 @@ dependencies = [
 
 [[package]]
 name = "ckb-fixed-hash"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "ckb-fixed-hash-core 0.34.1",
+ "ckb-fixed-hash-hack 0.34.1",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "ckb-fixed-hash"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-fixed-hash-core",
- "ckb-fixed-hash-hack",
+ "ckb-fixed-hash-core 0.35.0-pre",
+ "ckb-fixed-hash-hack 0.35.0-pre",
  "proc-macro-hack",
+]
+
+[[package]]
+name = "ckb-fixed-hash-core"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "failure",
+ "faster-hex 0.4.1",
+ "serde 1.0.105",
 ]
 
 [[package]]
@@ -419,14 +450,34 @@ dependencies = [
 
 [[package]]
 name = "ckb-fixed-hash-hack"
-version = "0.35.0-pre"
-source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
 dependencies = [
- "ckb-fixed-hash-core",
+ "ckb-fixed-hash-core 0.34.1",
  "proc-macro-hack",
  "proc-macro2 0.4.30",
  "quote 0.6.13",
  "syn 0.15.44",
+]
+
+[[package]]
+name = "ckb-fixed-hash-hack"
+version = "0.35.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
+dependencies = [
+ "ckb-fixed-hash-core 0.35.0-pre",
+ "proc-macro-hack",
+ "proc-macro2 0.4.30",
+ "quote 0.6.13",
+ "syn 0.15.44",
+]
+
+[[package]]
+name = "ckb-hash"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "blake2b-rs",
 ]
 
 [[package]]
@@ -444,7 +495,7 @@ dependencies = [
  "bincode",
  "ckb-rocksdb",
  "ckb-sdk",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "failure",
  "log 0.4.11",
  "serde 1.0.105",
@@ -456,7 +507,7 @@ name = "ckb-jsonrpc-types"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "faster-hex 0.4.1",
  "jsonrpc-core 14.0.5",
  "serde 1.0.105",
@@ -485,12 +536,30 @@ dependencies = [
 
 [[package]]
 name = "ckb-occupied-capacity"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "ckb-occupied-capacity-core 0.34.1",
+ "ckb-occupied-capacity-macros 0.34.1",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "ckb-occupied-capacity"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-occupied-capacity-core",
- "ckb-occupied-capacity-macros",
+ "ckb-occupied-capacity-core 0.35.0-pre",
+ "ckb-occupied-capacity-macros 0.35.0-pre",
  "proc-macro-hack",
+]
+
+[[package]]
+name = "ckb-occupied-capacity-core"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "serde 1.0.105",
 ]
 
 [[package]]
@@ -503,10 +572,21 @@ dependencies = [
 
 [[package]]
 name = "ckb-occupied-capacity-macros"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "ckb-occupied-capacity-core 0.34.1",
+ "proc-macro-hack",
+ "quote 0.6.13",
+ "syn 0.15.44",
+]
+
+[[package]]
+name = "ckb-occupied-capacity-macros"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-occupied-capacity-core",
+ "ckb-occupied-capacity-core 0.35.0-pre",
  "proc-macro-hack",
  "quote 0.6.13",
  "syn 0.15.44",
@@ -518,11 +598,19 @@ version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
  "byteorder",
- "ckb-hash",
- "ckb-types",
+ "ckb-hash 0.35.0-pre",
+ "ckb-types 0.35.0-pre",
  "eaglesong",
  "log 0.4.11",
  "serde 1.0.105",
+]
+
+[[package]]
+name = "ckb-rational"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "numext-fixed-uint",
 ]
 
 [[package]]
@@ -539,7 +627,7 @@ version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
  "ckb-system-scripts",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "includedir",
  "includedir_codegen",
  "phf",
@@ -565,11 +653,11 @@ source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b
 dependencies = [
  "byteorder",
  "ckb-chain-spec",
- "ckb-error",
- "ckb-hash",
+ "ckb-error 0.35.0-pre",
+ "ckb-hash 0.35.0-pre",
  "ckb-logger",
  "ckb-traits",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "ckb-vm",
  "ckb-vm-definitions",
  "failure",
@@ -588,12 +676,12 @@ dependencies = [
  "byteorder",
  "chrono",
  "ckb-crypto",
- "ckb-hash",
+ "ckb-hash 0.35.0-pre",
  "ckb-jsonrpc-types",
  "ckb-resource",
  "ckb-script",
  "ckb-sdk-types",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "failure",
  "faster-hex 0.4.1",
  "fnv",
@@ -614,11 +702,11 @@ name = "ckb-sdk-types"
 version = "0.35.0"
 dependencies = [
  "ckb-crypto",
- "ckb-error",
- "ckb-hash",
+ "ckb-error 0.35.0-pre",
+ "ckb-hash 0.35.0-pre",
  "ckb-jsonrpc-types",
  "ckb-traits",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "serde 1.0.105",
  "serde_derive",
 ]
@@ -641,7 +729,27 @@ name = "ckb-traits"
 version = "0.35.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b300a83832a760b9899cc401dcfd"
 dependencies = [
- "ckb-types",
+ "ckb-types 0.35.0-pre",
+]
+
+[[package]]
+name = "ckb-types"
+version = "0.34.1"
+source = "git+https://github.com/nervosnetwork/ckb?tag=v0.34.1#323e44c954a693a8dc0a6c4b0e0b52b89d189d45"
+dependencies = [
+ "bit-vec",
+ "bytes 0.5.4",
+ "ckb-error 0.34.1",
+ "ckb-fixed-hash 0.34.1",
+ "ckb-hash 0.34.1",
+ "ckb-occupied-capacity 0.34.1",
+ "ckb-rational 0.34.1",
+ "crossbeam-channel",
+ "failure",
+ "merkle-cbt",
+ "molecule",
+ "numext-fixed-uint",
+ "once_cell",
 ]
 
 [[package]]
@@ -651,11 +759,11 @@ source = "git+https://github.com/nervosnetwork/ckb?tag=v0.35.0-rc1#0c1a61c0ca13b
 dependencies = [
  "bit-vec",
  "bytes 0.5.4",
- "ckb-error",
- "ckb-fixed-hash",
- "ckb-hash",
- "ckb-occupied-capacity",
- "ckb-rational",
+ "ckb-error 0.35.0-pre",
+ "ckb-fixed-hash 0.35.0-pre",
+ "ckb-hash 0.35.0-pre",
+ "ckb-occupied-capacity 0.35.0-pre",
+ "ckb-rational 0.35.0-pre",
  "crossbeam-channel",
  "failure",
  "merkle-cbt",
@@ -3049,12 +3157,12 @@ dependencies = [
  "ckb-cli-plugin-protocol",
  "ckb-crypto",
  "ckb-dao-utils",
- "ckb-hash",
+ "ckb-hash 0.35.0-pre",
  "ckb-index",
  "ckb-jsonrpc-types",
  "ckb-resource",
  "ckb-sdk",
- "ckb-types",
+ "ckb-types 0.35.0-pre",
  "ckb-util",
  "clap",
  "clap_generate",
@@ -3102,6 +3210,7 @@ name = "tockb-types"
 version = "0.1.0"
 dependencies = [
  "cfg-if",
+ "ckb-types 0.34.1",
  "int-enum",
  "molecule",
 ]

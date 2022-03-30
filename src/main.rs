@@ -19,8 +19,8 @@ use interactive::InteractiveEnv;
 use plugin::PluginManager;
 use subcommands::{
     start_index_thread, AccountSubCommand, ApiServerSubCommand, CliSubCommand, DAOSubCommand,
-    MockTxSubCommand, MoleculeSubCommand, PluginSubCommand, RpcSubCommand, ToCkbSubCommand,
-    TxSubCommand, UtilSubCommand, WalletSubCommand,
+    MockTxSubCommand, MoleculeSubCommand, PluginSubCommand, RpcSubCommand, SudtSubCommand,
+    ToCkbSubCommand, TxSubCommand, UtilSubCommand, WalletSubCommand,
 };
 use utils::other::get_genesis_info;
 use utils::{
@@ -175,6 +175,15 @@ fn main() -> Result<(), io::Error> {
             wait_for_sync,
         )
         .process(&sub_matches, debug),
+        ("sudt", Some(sub_matches)) => SudtSubCommand::new(
+            &mut rpc_client,
+            &mut plugin_mgr,
+            None,
+            index_dir,
+            index_controller.clone(),
+            wait_for_sync,
+        )
+        .process(&sub_matches, debug),
         ("dao", Some(sub_matches)) => {
             get_genesis_info(&None, &mut rpc_client).and_then(|genesis_info| {
                 DAOSubCommand::new(
@@ -271,6 +280,7 @@ pub fn build_cli<'a>(version_short: &'a str, version_long: &'a str) -> App<'a> {
         .subcommand(MoleculeSubCommand::subcommand("molecule"))
         .subcommand(WalletSubCommand::subcommand())
         .subcommand(ToCkbSubCommand::subcommand())
+        .subcommand(SudtSubCommand::subcommand())
         .subcommand(DAOSubCommand::subcommand())
         .arg(
             Arg::with_name("url")
